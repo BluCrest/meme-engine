@@ -115,11 +115,13 @@ async function flushTopAlerts() {
   queuedAlerts.length = 0;
   console.log(`[AlertBatcher] ${fresh.length} queued, filtering for >= ${ALERT_THRESHOLD}%...`);
 
+  const scores = fresh.map(a => `${a.token.symbol || '?'}:${a.result.apeProbability}%`).join(', ');
   const eligible = fresh
     .filter(a => a.result.apeProbability >= ALERT_THRESHOLD)
     .sort((a, b) => b.result.apeProbability - a.result.apeProbability)
     .slice(0, MAX_ALERTS);
 
+  console.log(`[AlertBatcher] Scores: [${scores}] → ${eligible.length} eligible`);
   if (!eligible.length) return;
 
   let message = `🚀 *TOP ${eligible.length} SIGNALS*\n━━━━━━━━━━━━━━━━━━━━\n\n`;
@@ -138,11 +140,17 @@ async function flushTopAlerts() {
 
   message += `━━━━━━━━━━━━━━━━━━━━\nUse /positions and /portfolio to manage`;
 
-  await sendTelegram('sendMessage', {
+  const sent = await sendTelegram('sendMessage', {
     chat_id: CHAT_ID,
     text: message,
     parse_mode: 'Markdown'
   });
+
+  if (sent?.ok) {
+    console.log(`[AlertBatcher] Alert sent (${eligible.length} tokens)`);
+  } else {
+    console.error(`[AlertBatcher] Send failed:`, sent?.description || 'unknown');
+  }
 
   // Auto-buy top 2 tokens from this batch
   await autoBuyTopN(eligible, 2);
