@@ -7,10 +7,24 @@ const TAKE_PROFIT = 1.5;
 const STOP_LOSS = -0.30;
 const TRAILING_PCT = 0.12;
 const MAX_POSITIONS = 3;
-const MAX_PORTFOLIO_PCT = 0.15; // max 15% of wallet per trade
+const MAX_PORTFOLIO_PCT = 0.15;
 const MIN_BUY = 0.002;
 
+const BOT_TOKEN = config.telegram.botToken;
+const CHAT_ID = config.telegram.chatId;
+const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
 let activePositions = new Map();
+
+async function sendTelegramMessage(text) {
+  try {
+    await fetch(`${API_BASE}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: CHAT_ID, text, parse_mode: 'Markdown' })
+    });
+  } catch (_) {}
+}
 
 async function getTokenPrice(tokenAddress) {
   try {
@@ -53,7 +67,10 @@ async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerTyp
         trigger: triggerType || 'momentum'
       };
       activePositions.set(tokenAddress, position);
+      const pctStr = (pctOfBalance * 100).toFixed(0);
+      const label = triggerType === 'copy_trade' ? '👥 COPY' : '⚡ MOMENTUM';
       console.log(`[MomentumTrader] ${symbol}: BOUGHT ${actualAmount.toFixed(4)} SOL @ $${entryPrice} (${position.trigger})`);
+      await sendTelegramMessage(`${label} *$${symbol}* — bought ${actualAmount.toFixed(4)} SOL (${pctStr}% of wallet) | Trigger: ${triggerType} | CA: \`${tokenAddress}\``);
       return position;
     }
     return null;
@@ -72,8 +89,9 @@ async function executeMomentumSell(tokenAddress, reason) {
     if (result && result.success) {
       const currentPrice = await getTokenPrice(tokenAddress) || 0;
       const pnl = pos.entryPrice > 0 ? ((currentPrice / pos.entryPrice) - 1) * 100 : 0;
+      const emoji = pnl > 0 ? '✅' : '❌';
       console.log(`[MomentumTrader] ${pos.symbol}: SOLD (${reason}) PnL: ${pnl.toFixed(1)}%`);
-      // Record outcome for copy trader learning
+      await sendTelegramMessage(`${emoji} *$${pos.symbol}* sold (${reason}) — PnL: ${pnl > 0 ? '+' : ''}${pnl.toFixed(1)}% | Invested: ${pos.solInvested.toFixed(4)} SOL`);
       copyTrader.finalizeToken(tokenAddress, currentPrice || pos.entryPrice);
       activePositions.delete(tokenAddress);
     }
