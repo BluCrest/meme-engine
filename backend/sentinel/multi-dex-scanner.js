@@ -53,13 +53,12 @@ async function scanDexScreener() {
         if (mc > 3000 || mc < 1000) continue;
         const vol = pair.volume?.h24 || 0;
         if (vol < 500) continue;
-        // Rug check: skip if dropped >80% in 24h
+        // Skip if already rugged (>80% drop in 24h)
         const priceChange = pair.priceChange?.h24 || 0;
         if (priceChange < -80) continue;
-        // Freshness check: skip if created < 2 min ago (snipe launches)
+        // Age for scoring (passed to quick-flip tier later)
         const ageMin = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
-        if (ageMin < 2) continue;
-        candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc, volume: vol, dex: pair.dexId });
+        candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc, volume: vol, dex: pair.dexId, age_min: ageMin });
       }
     }
 
@@ -76,7 +75,7 @@ async function scanDexScreener() {
           if (mc > 3000 || mc < 1000) continue;
           const vol = volByAddress.get(addr) || 0;
           if (vol < 500) continue;
-          candidates.push({ addr, symbol: profile.symbol, name: profile.name, mc, volume: vol, dex: profile.dexId || 'unknown' });
+          candidates.push({ addr, symbol: profile.symbol, name: profile.name, mc, volume: vol, dex: profile.dexId || 'unknown', age_min: 999 });
         } else {
           if (candidates.length > 30) continue;
           await sleep(300);
@@ -89,7 +88,10 @@ async function scanDexScreener() {
             if (mc > 3000 || mc < 1000) continue;
             const vol = pair.volume?.h24 || 0;
             if (vol < 500) continue;
-            candidates.push({ addr, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name, mc, volume: vol, dex: pair.dexId || 'unknown' });
+            const priceChange = pair.priceChange?.h24 || 0;
+            if (priceChange < -80) continue;
+            const ageMin = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
+            candidates.push({ addr, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name, mc, volume: vol, dex: pair.dexId || 'unknown', age_min: ageMin });
           } catch (_) { /* skip if fetch fails */ }
         }
       }
@@ -100,7 +102,7 @@ async function scanDexScreener() {
       const existing = await db.getToken(c.addr);
       if (existing) continue;
 
-      console.log(`[MultiDEX] New token: ${c.symbol || '?'} (${c.addr}) MC: $${c.mc} Vol: $${(c.volume || 0).toLocaleString()}`);
+      console.log(`[MultiDEX] New token: ${c.symbol || '?'} (${c.addr}) MC: $${c.mc} Vol: $${(c.volume || 0).toLocaleString()} Age: ${(c.age_min || 0).toFixed(1)}m`);
 
       await db.upsertToken({
         address: c.addr,
@@ -108,6 +110,7 @@ async function scanDexScreener() {
         name: c.name,
         current_mc: c.mc,
         volume_24h: c.volume || 0,
+        age_min: c.age_min || 999,
         status: 'new',
         created_at: new Date(),
         dex: c.dex

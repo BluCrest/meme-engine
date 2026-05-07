@@ -163,10 +163,15 @@ async function autoBuyTopN(eligible, n) {
   // Safety gates
   const safe = eligible.filter(e => {
     const r = e.result;
+    const t = e.token;
     if (r.bundleInfo?.bundleDetected) return false;
     if (r.clusterAnalysis?.clusterRisk === 'high') return false;
     if (r.safety?.safetyScore < 40) return false;
     if (r.divergenceCheck?.divergenceScore > 50) return false;
+    if (r.safety?.top5Concentration > 50) return false;
+    if (r.devProfile?.label === 'serial_rugger') return false;
+    if (r.devProfile?.rug_count >= 3) return false;
+    if (!r.safety?.liquidityLocked && (t.age_min || 999) > 5) return false;
     return true;
   });
 
@@ -192,9 +197,10 @@ async function autoBuyTopN(eligible, n) {
 
   for (const { token, result } of top) {
     try {
-      // Confidence-based sizing: higher score = bigger allocation
+      // Fresh token sizing (<2min = quick flip, smaller, tighter)
+      const isFresh = (token.age_min || 999) < 2;
       const score = result.apeProbability;
-      const sizeMultiplier = score >= 90 ? 1.5 : score >= 80 ? 1.0 : 0.5;
+      const sizeMultiplier = isFresh ? 0.3 : score >= 90 ? 1.5 : score >= 80 ? 1.0 : 0.5;
       const maxPerTrade = config.config.maxSolPerTrade || 0.1;
       const amount = Math.min(maxPerTrade * sizeMultiplier, availableBudget / top.length);
       if (amount < 0.001) continue;
@@ -210,7 +216,7 @@ async function autoBuyTopN(eligible, n) {
           // Fallback: map score to target
           sellTarget = 1 + score / 60; // 67% → 2.1x, 80% → 2.3x, 95% → 2.6x
         }
-        const exitMultiplier = Math.max(sellTarget * 0.985, 1.6);
+        const exitMultiplier = Math.max(sellTarget * 0.985, isFresh ? 1.2 : 1.6);
 
         const moonshotPct = result.moonshotProbability || result.deepseekAnalysis?.moonshot_probability || 0;
         await db.getDb().collection('positions').updateOne(
@@ -218,7 +224,7 @@ async function autoBuyTopN(eligible, n) {
           { $set: { sell_target_multiplier: exitMultiplier, sell_target_set_at: new Date(), auto_buy_score: score, moonshot_probability: moonshotPct } }
         );
 
-        const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\n${amount.toFixed(4)} SOL | Target: ${exitMultiplier.toFixed(2)}x | Score: ${score}% | Vol: $${formatMC(token.volume_24h || 0)}`;
+        const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\n${amount.toFixed(4)} SOL | Target: ${exitMultiplier.toFixed(2)}x${isFresh ? ' ⚡FLIP' : ''} | Score: ${score}% | Vol: $${formatMC(token.volume_24h || 0)}`;
         await sendTelegram('sendMessage', { chat_id: CHAT_ID, text: notifyMsg, parse_mode: 'Markdown' });
       }
     } catch (e) {
