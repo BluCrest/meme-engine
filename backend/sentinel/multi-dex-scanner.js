@@ -13,63 +13,13 @@ const DEX_PROGRAMS = {
 };
 
 let lastChecked = Date.now();
-const CHECK_INTERVAL = 60000; // Check every minute
+const CHECK_INTERVAL = 180000; // Check every 3 min (avoids rate limits)
 
-// Fetch new tokens from DexScreener (covers ALL DEXes)
+// Fetch new tokens from DexScreener — single batch call, no N+1
 async function scanDexScreener() {
   try {
-    // Method 1: Token profiles - best for discovering newly created tokens
-    const profileRes = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
-    const profiles = await profileRes.json();
-
-    if (Array.isArray(profiles)) {
-      for (const profile of profiles) {
-        const tokenAddress = profile.tokenAddress;
-        if (!tokenAddress) continue;
-        // Skip EVM tokens (0x...) — Solana addresses only
-        if (tokenAddress.startsWith('0x') || tokenAddress.length < 32 || tokenAddress.length > 44) continue;
-
-        const existing = await db.getToken(tokenAddress);
-        if (existing) continue;
-
-        // Fetch pair data to get market cap
-        try {
-          const pairRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-          const pairData = await pairRes.json();
-          const pair = pairData.pairs?.[0];
-          if (!pair) continue;
-
-          const mc = pair.fdv || 0;
-          if (mc >= 1000000) continue;
-          if (mc < 1000) continue; // skip dust
-
-          console.log(`[MultiDEX] New token from profiles: ${pair.baseToken?.symbol} (${tokenAddress}) MC: $${mc}`);
-
-          await db.upsertToken({
-            address: tokenAddress,
-            symbol: pair.baseToken?.symbol,
-            name: pair.baseToken?.name,
-            current_mc: mc,
-            status: 'new',
-            created_at: new Date(),
-            dex: pair.dexId
-          });
-
-          setTimeout(async () => {
-            const result = await computeFinalScore(tokenAddress);
-            const token = await db.getToken(tokenAddress);
-            queueScoredToken(token, result);
-          }, 30000);
-        } catch (e) {
-          // skip profile if pair data unavailable
-        }
-      }
-    }
-
-    // Method 2: Broad Solana search as fallback coverage
     const searchRes = await fetch('https://api.dexscreener.com/latest/dex/search?q=solana');
     const data = await searchRes.json();
-
     if (!data.pairs) return;
 
     const processed = new Set();
@@ -87,7 +37,7 @@ async function scanDexScreener() {
       if (mc >= 1000000) continue;
       if (mc < 1000) continue;
 
-      console.log(`[MultiDEX] New token from search: ${pair.baseToken?.symbol} (${tokenAddress}) MC: $${mc}`);
+      console.log(`[MultiDEX] New token: ${pair.baseToken?.symbol} (${tokenAddress}) MC: $${mc}`);
 
       await db.upsertToken({
         address: tokenAddress,
@@ -99,11 +49,13 @@ async function scanDexScreener() {
         dex: pair.dexId
       });
 
+      // Stagger scoring so RPC calls don't spike
+      const delay = 30000 + Math.random() * 60000;
       setTimeout(async () => {
         const result = await computeFinalScore(tokenAddress);
         const token = await db.getToken(tokenAddress);
         queueScoredToken(token, result);
-      }, 30000);
+      }, delay);
     }
   } catch (err) {
     console.error('[MultiDEX] Scan error:', err.message);
@@ -159,12 +111,13 @@ async function scanJupiter() {
         created_at: new Date()
       });
 
-      // Compute score after a small delay (let initial liquidity settle)
+      // Stagger scoring to avoid RPC spikes
+      const delay = 30000 + Math.random() * 90000;
       setTimeout(async () => {
         const result = await computeFinalScore(tokenAddress);
         const tokenData = await db.getToken(tokenAddress);
         queueScoredToken(tokenData, result);
-      }, 30000); // Wait 30s before scoring
+      }, delay);
     }
   } catch (err) {
     console.error('[Jupiter] Scan error:', err.message);

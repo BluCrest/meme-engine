@@ -1,10 +1,12 @@
 const db = require('../database/db');
 
-/**
- * Get current token price from DexScreener
- * Returns price in USD
- */
+const priceCache = new Map();
+const CACHE_TTL = 120000; // 2 min cache
+
 async function getCurrentPrice(tokenAddress) {
+  const cached = priceCache.get(tokenAddress);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.price;
+
   try {
     const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
     const data = await res.json();
@@ -22,7 +24,9 @@ async function getCurrentPrice(tokenAddress) {
       timestamp: new Date()
     });
 
-    return parseFloat(pair.priceUsd) || 0;
+    const price = parseFloat(pair.priceUsd) || 0;
+    priceCache.set(tokenAddress, { price, ts: Date.now() });
+    return price;
   } catch (err) {
     console.error('[PriceFeed] Error:', err.message);
     return 0;
