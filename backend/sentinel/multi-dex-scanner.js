@@ -32,9 +32,15 @@ async function scanDexScreener() {
       const existing = await db.getToken(tokenAddress);
       if (existing) continue;
 
-      // Focus on micro-cap tokens around $2K MC (super early entry)
+      // Focus on micro-cap tokens: under 1M MC, prefer 1K-10K MC
       const mc = pair.fdv || 0;
-      if (mc < 1000 || mc > 5000) continue; // Prefer $1K-$5K MC (around $2K ideal)
+      if (mc >= 1000000) continue; // Skip if MC >= $1M
+      // Preferred buy range: 1K-10K MC
+      const isPreferred = mc >= 1000 && mc <= 10000;
+      if (!isPreferred) {
+        console.log(`[MultiDEX] Skipping ${pair.baseToken?.symbol} - MC $${mc} (not in preferred 1K-10K range)`);
+        continue;
+      }
 
       console.log(`[MultiDEX] New token found: ${pair.baseToken?.symbol} (${tokenAddress})`);
 
