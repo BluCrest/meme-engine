@@ -26,6 +26,8 @@ async function scanDexScreener() {
       for (const profile of profiles) {
         const tokenAddress = profile.tokenAddress;
         if (!tokenAddress) continue;
+        // Skip EVM tokens (0x...) — Solana addresses only
+        if (tokenAddress.startsWith('0x') || tokenAddress.length < 32 || tokenAddress.length > 44) continue;
 
         const existing = await db.getToken(tokenAddress);
         if (existing) continue;
@@ -74,6 +76,7 @@ async function scanDexScreener() {
     for (const pair of data.pairs) {
       const tokenAddress = pair.baseToken?.address;
       if (!tokenAddress) continue;
+      if (tokenAddress.startsWith('0x') || tokenAddress.length < 32 || tokenAddress.length > 44) continue;
       if (processed.has(tokenAddress)) continue;
       processed.add(tokenAddress);
 

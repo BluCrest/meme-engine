@@ -16,6 +16,9 @@ async function getDevWallet(tokenAddress) {
 
 async function computeFinalScore(tokenAddress) {
   try {
+    if (tokenAddress.startsWith('0x') || tokenAddress.length < 32 || tokenAddress.length > 44) {
+      return { status: 'disqualified', reason: 'not_solana', apeProbability: 0, shouldAlert: false };
+    }
     const token = await db.getToken(tokenAddress);
     const symbol = token?.symbol || 'UNKNOWN';
 
