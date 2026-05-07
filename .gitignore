@@ -1,0 +1,11 @@
+node_modules
+.env
+server.pid
+*.pyc
+__pycache__/
+finish_all.py
+finish_server.py
+fix_all.py
+fix_trade.py
+generate-tg-session.js
+package-lock.json

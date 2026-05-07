@@ -1,0 +1,236 @@
+const express = require('express');
+const config = require('./config');
+const db = require('./database/db');
+
+const app = express();
+app.use(express.json());
+
+const PORT = process.env.PORT || 3000;
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Manual safety check endpoint
+app.get('/check/:tokenAddress', async (req, res) => {
+  const { runSafetyCheck } = require('./sentinel/safety-checker');
+  try {
+    const result = await runSafetyCheck(req.params.tokenAddress);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Manual alert test endpoint
+app.post('/alert/:tokenAddress', async (req, res) => {
+  const token = await db.getToken(req.params.tokenAddress);
+  if (!token) return res.status(404).json({ error: 'Token not found' });
+
+  const { analyzeTokenRealTime } = require('./strategist/deepseek-analyzer');
+  const analysis = await analyzeTokenRealTime({
+    tokenAddress: token.address,
+    symbol: token.symbol,
+    safety: { safetyScore: 75 },
+    social: { socialScore: 60 },
+    smartMoney: { smartMoneyScore: 40 }
+  });
+
+  const { sendTokenAlert } = require('./operator/telegram-bot');
+  await sendTokenAlert(
+    token,
+    { safetyScore: 75, socialScore: 60, smartMoneyScore: 40, apeProbability: analysis.ape_probability },
+    { label: 'first_time', total_launches: 1, rug_count: 0, avg_return_at_peak: 2.0, reputation_score: 80 },
+    analysis
+  );
+  res.json({ status: 'alert sent', analysis });
+});
+
+// Weekly retro endpoint
+app.post('/retro', async (req, res) => {
+  const { weeklyRetro } = require('./strategist/deepseek-analyzer');
+  try {
+    const result = await weeklyRetro();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Score engine endpoint
+app.get('/score/:tokenAddress', async (req, res) => {
+  const { computeFinalScore } = require('./strategist/score-engine');
+  try {
+    const result = await computeFinalScore(req.params.tokenAddress);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PnL card endpoint
+app.get('/pnl/:tokenAddress', async (req, res) => {
+  const { generatePnLCard } = require('./operator/pnl-card');
+  const trades = await db.getDb().collection('trades')
+    .find({ token_address: req.params.tokenAddress })
+    .sort({ timestamp: 1 })
+    .toArray();
+
+  if (!trades.length) return res.status(404).json({ error: 'No trades found' });
+
+  try {
+    const card = await generatePnLCard(trades[0]);
+    res.json({ card });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Portfolio summary
+app.get('/portfolio', async (req, res) => {
+  const { generatePortfolioSummary } = require('./operator/pnl-card');
+  try {
+    const summary = await generatePortfolioSummary();
+    res.json({ summary });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Manual buy endpoint
+app.post('/buy/:tokenAddress', async (req, res) => {
+  const { executeBuy } = require('./operator/trade-executor');
+  const { amount } = req.body || {};
+  try {
+    const result = await executeBuy(req.params.tokenAddress, 'manual', amount);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Manual sell endpoint
+app.post('/sell/:tokenAddress', async (req, res) => {
+  const { executeSell } = require('./operator/trade-executor');
+  const { ratio, reason } = req.body || {};
+  try {
+    const result = await executeSell(req.params.tokenAddress, ratio || 1.0, reason || 'manual');
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Divergence scan endpoint
+app.get('/divergence/:tokenAddress', async (req, res) => {
+  const { checkMomentumDivergence } = require('./detective/momentum-divergence');
+  try {
+    const result = await checkMomentumDivergence(req.params.tokenAddress);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Manual divergence scan
+app.post('/divergence/scan', async (req, res) => {
+  const { runDivergenceScan } = require('./detective/momentum-divergence');
+  try {
+    await runDivergenceScan();
+    res.json({ status: 'scan complete' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Cross-chain check endpoint
+app.get('/cross-chain/:wallet', async (req, res) => {
+  const { checkCrossChainHistory } = require('./profiler/cross-chain-tracker');
+  try {
+    const result = await checkCrossChainHistory(req.params.wallet);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Smart money endpoints
+app.get('/smart-money/:tokenAddress', async (req, res) => {
+  const { getSmartMoneyScore } = require('./profiler/smart-money');
+  try {
+    const result = await getSmartMoneyScore(req.params.tokenAddress);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/wallet/:address', async (req, res) => {
+  const { getWalletProfile } = require('./profiler/wallet-pnl');
+  try {
+    const profile = await getWalletProfile(req.params.address);
+    res.json(profile || { error: 'Wallet not found' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/top-wallets', async (req, res) => {
+  const { getTopPerformingWallets } = require('./profiler/wallet-pnl');
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const wallets = await getTopPerformingWallets(limit);
+    res.json(wallets);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Graduation tracker endpoint
+app.get('/graduation/:tokenAddress', async (req, res) => {
+  const { getBondingCurveProgress } = require('./strategist/graduation-tracker');
+  try {
+    const result = await getBondingCurveProgress(req.params.tokenAddress);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Wallet cluster endpoint
+app.get('/cluster/:tokenAddress', async (req, res) => {
+  const { analyzeWalletClusters } = require('./sentinel/wallet-cluster');
+  try {
+    const result = await analyzeWalletClusters(req.params.tokenAddress);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Start all services
+db.connect().then(async () => {
+  console.log('[Server] Database connected');
+
+  // Start token listener
+  const { startTokenListener } = require('./sentinel/token-listener');
+  startTokenListener().catch(err => {
+    console.error('[Server] Token listener failed:', err.message);
+  });
+
+  // Start exit manager
+  const { startExitManager } = require('./operator/exit-manager');
+  startExitManager();
+
+  // Start pre-launch monitor
+  const { startPreLaunchMonitor } = require('./prelaunch/tg-group-monitor');
+  startPreLaunchMonitor().catch(err => {
+    console.error('[Server] Pre-launch monitor failed:', err.message);
+  });
+
+  console.log('[Server] All services started');
+
+  app.listen(PORT, () => {
+    console.log('Server running on port ' + PORT);
+  });
+});
