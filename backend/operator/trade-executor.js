@@ -49,16 +49,20 @@ async function fetchWithTimeout(url, options, timeoutMs = 15000) {
 async function getJupiterQuote(input, output, amount, slippageBps) {
   slippageBps = slippageBps || 300;
   const endpoints = [
-    'https://quote-api.jup.ag/v6',
-    'https://api.jup.ag/v6'
+    { base: 'https://api.jup.ag/swap/v1', path: '/quote' },
+    { base: 'https://quote-api.jup.ag/v6', path: '/quote' },
+    { base: 'https://api.jup.ag/v6', path: '/quote' }
   ];
   let lastErr;
-  for (const base of endpoints) {
+  for (const { base, path } of endpoints) {
     try {
-      const url = base + '/quote?inputMint=' + input + '&outputMint=' + output + '&amount=' + amount + '&slippageBps=' + slippageBps + '&onlyDirectRoutes=false';
+      const url = `${base}${path}?inputMint=${input}&outputMint=${output}&amount=${amount}&slippageBps=${slippageBps}`;
       const res = await fetchWithTimeout(url, {}, 10000);
-      if (!res.ok) { lastErr = new Error('Jupiter quote ' + res.status); continue; }
-      return res.json();
+      if (!res.ok) { lastErr = new Error(`Jupiter q ${res.status} ${path}`); continue; }
+      const data = await res.json();
+      if (!data || data.error) { lastErr = new Error('Jupiter no route'); continue; }
+      console.log(`[Executor] Quote from ${base}${path}`);
+      return data;
     } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error('Jupiter quote failed');
@@ -66,11 +70,12 @@ async function getJupiterQuote(input, output, amount, slippageBps) {
 
 async function executeJupiterSwap(quoteResp, userPk) {
   const endpoints = [
-    'https://quote-api.jup.ag/v6',
-    'https://api.jup.ag/v6'
+    { base: 'https://api.jup.ag/swap/v1', path: '/swap' },
+    { base: 'https://quote-api.jup.ag/v6', path: '/swap' },
+    { base: 'https://api.jup.ag/v6', path: '/swap' }
   ];
   let lastErr;
-  for (const base of endpoints) {
+  for (const { base, path } of endpoints) {
     try {
       const body = JSON.stringify({
         quoteResponse: quoteResp,
@@ -79,12 +84,12 @@ async function executeJupiterSwap(quoteResp, userPk) {
         dynamicComputeUnitLimit: true,
         prioritizationFeeLamports: 'auto'
       });
-      const res = await fetchWithTimeout(base + '/swap', {
+      const res = await fetchWithTimeout(base + path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: body
       }, 15000);
-      if (!res.ok) { lastErr = new Error('Jupiter swap ' + res.status); continue; }
+      if (!res.ok) { lastErr = new Error(`Jupiter swap ${res.status} ${path}`); continue; }
       return res.json();
     } catch (e) { lastErr = e; }
   }
