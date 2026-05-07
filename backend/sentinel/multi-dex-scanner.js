@@ -45,7 +45,9 @@ async function scanDexScreener() {
         if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
         if (seen.has(addr)) continue;
         seen.add(addr);
-        candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc: pair.fdv || 0, dex: pair.dexId });
+        const mc = pair.fdv || 0;
+        if (mc > 10000 || mc < 1000) continue;
+        candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc, dex: pair.dexId });
       }
     }
 
@@ -60,7 +62,7 @@ async function scanDexScreener() {
         if (mcByAddress.has(addr)) {
           // MC already known from search results
           const mc = mcByAddress.get(addr);
-          if (mc >= 1000000 || mc < 1000) continue;
+          if (mc > 10000 || mc < 1000) continue;
           candidates.push({ addr, symbol: profile.symbol, name: profile.name, mc, dex: profile.dexId || 'unknown' });
         } else {
           // Need individual fetch — but skip if we already have enough
@@ -72,7 +74,7 @@ async function scanDexScreener() {
             const pair = pairData.pairs?.[0];
             if (!pair) continue;
             const mc = pair.fdv || 0;
-            if (mc >= 1000000 || mc < 1000) continue;
+            if (mc > 10000 || mc < 1000) continue;
             candidates.push({ addr, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name, mc, dex: pair.dexId || 'unknown' });
           } catch (_) { /* skip if fetch fails */ }
         }

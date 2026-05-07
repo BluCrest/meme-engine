@@ -80,32 +80,45 @@ async function computeFinalScore(tokenAddress) {
       safety, social, smartMoney, devProfile, clusterAnalysis, bundleInfo
     });
 
-    // DeepSeek real-time analysis
-    const deepseekResult = await analyzeTokenRealTime({
-      tokenAddress,
-      safety,
-      social,
-      smartMoney,
-      devProfile,
-      clusterAnalysis,
-      bundleInfo,
-      graduationInfo,
-      divergenceCheck,
-      apeProbability: Math.round(apeProbability),
-      moonshotProbability: Math.round(moonshotProbability)
-    });
+    // DeepSeek real-time analysis (falls back to local synthesis when unavailable)
+    let deepseekResult;
+    try {
+      deepseekResult = await analyzeTokenRealTime({
+        tokenAddress,
+        safety,
+        social,
+        smartMoney,
+        devProfile,
+        clusterAnalysis,
+        bundleInfo,
+        graduationInfo,
+        divergenceCheck,
+        apeProbability: Math.round(apeProbability),
+        moonshotProbability: Math.round(moonshotProbability)
+      });
+    } catch (_) {
+      deepseekResult = null;
+    }
 
-    const deepseekValid = deepseekResult.confidence > 0 || deepseekResult.ape_probability > 0;
+    const deepseekValid = deepseekResult?.confidence > 0 || deepseekResult?.ape_probability > 0;
     const finalApeProbability = deepseekValid
       ? Math.round(apeProbability * 0.6 + deepseekResult.ape_probability * 0.4)
       : Math.round(apeProbability);
 
+    // Use local synthesis when DeepSeek unavailable
+    const analysis = deepseekValid ? deepseekResult : synthesizeAnalysis({
+      safety, social, smartMoney, devProfile, bundleInfo, clusterAnalysis,
+      divergenceCheck, graduationInfo,
+      apeProbability: finalApeProbability,
+      moonshotProbability: Math.round(moonshotProbability)
+    });
+
     const result = {
       apeProbability: finalApeProbability,
-      moonshotProbability: deepseekResult.moonshot_probability || 0,
-      absoluteMoonshotProbability: deepseekResult.absolute_moonshot_probability || 0,
+      moonshotProbability: analysis.moonshot_probability || 0,
+      absoluteMoonshotProbability: analysis.absolute_moonshot_probability || 0,
       shouldAlert: finalApeProbability >= 55,
-      deepseekAnalysis: deepseekResult,
+      deepseekAnalysis: analysis,
       safety,
       social,
       smartMoney,
@@ -131,6 +144,62 @@ async function computeFinalScore(tokenAddress) {
     console.error('[ScoreEngine] Error:', err.message);
     throw err;
   }
+}
+
+// Local synthesis engine — replaces DeepSeek when unavailable
+function synthesizeAnalysis(data) {
+  const { safety, social, smartMoney, devProfile, bundleInfo, clusterAnalysis, divergenceCheck, graduationInfo } = data;
+  const signals = [];
+  const redFlags = [];
+
+  if (safety.safetyScore > 70) signals.push(`High safety score (${safety.safetyScore})`);
+  else if (safety.safetyScore < 40) redFlags.push(`Low safety score (${safety.safetyScore})`);
+  if (safety.ownershipRenounced) signals.push('Ownership renounced');
+  if (safety.liquidityLocked) signals.push(`Liquidity locked ${safety.liquidityLockDuration}h`);
+  if (safety.honeypot) redFlags.push('Honeypot detected');
+
+  if (smartMoney.smartMoneyCount >= 3) signals.push(`${smartMoney.smartMoneyCount} smart money wallets`);
+  if (smartMoney.smartMoneyScore > 60) signals.push(`Smart money confidence ${smartMoney.smartMoneyScore}`);
+
+  if (bundleInfo?.bundleDetected) redFlags.push('Bundle detected');
+  if (clusterAnalysis?.clusterRisk === 'high') redFlags.push('High cluster risk');
+
+  if (divergenceCheck?.divergenceScore > 50) redFlags.push(`Divergence ${divergenceCheck.divergenceScore}`);
+  if (graduationInfo?.graduationSignal === 'graduating_now') signals.push('Graduating now');
+
+  if (devProfile) {
+    if (devProfile.label === 'serial_rugger') redFlags.push('Serial rugger');
+    else if (devProfile.label === 'first_time') signals.push('First-time dev');
+    if (devProfile.reputation_score > 70) signals.push(`Dev reputation ${devProfile.reputation_score}`);
+  }
+
+  // Compute target from signals
+  let targetMultiplier = 2.0;
+  const positiveSignals = signals.length;
+  const negativeFlags = redFlags.length;
+  if (positiveSignals >= 4) targetMultiplier = 5.0;
+  else if (positiveSignals >= 3) targetMultiplier = 3.5;
+  else if (positiveSignals >= 2) targetMultiplier = 2.5;
+  if (negativeFlags > 0) targetMultiplier = Math.max(targetMultiplier * (1 - negativeFlags * 0.15), 1.1);
+
+  const reasoning = signals.length
+    ? `Synthesis: ${signals.join(', ')}${redFlags.length ? '. Risks: ' + redFlags.join(', ') : ''}`
+    : 'Synthesis: Limited positive signals, proceed with caution';
+
+  return {
+    ape_probability: data.apeProbability,
+    moonshot_probability: data.moonshotProbability,
+    absolute_moonshot_probability: 0,
+    risk_level: redFlags.length > 2 ? 'high' : redFlags.length > 0 ? 'medium' : 'low',
+    key_signals: signals,
+    red_flags: redFlags,
+    suggested_entry_mc: null,
+    suggested_exit_targets: [targetMultiplier],
+    reasoning,
+    confidence: Math.max(10, 70 - negativeFlags * 15 + positiveSignals * 5),
+    pattern_match: null,
+    secondary_signals: []
+  };
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }

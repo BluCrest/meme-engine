@@ -210,7 +210,7 @@ async function autoBuyTopN(eligible, n) {
           // Without DeepSeek: map score to a conservative target
           sellTarget = 1 + score / 60; // 67% → 2.1x, 80% → 2.3x, 95% → 2.6x
         }
-        const exitMultiplier = Math.max(sellTarget * 0.985, 1.01);
+        const exitMultiplier = Math.max(sellTarget * 0.985, 1.6);
 
         const moonshotPct = result.moonshotProbability || result.deepseekAnalysis?.moonshot_probability || 0;
         await db.getDb().collection('positions').updateOne(
