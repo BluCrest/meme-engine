@@ -1,22 +1,30 @@
 const TelegramBot = require('node-telegram-bot-api');
 const config = require('../config');
 const db = require('../database/db');
+const fetch = require('node-fetch');
 
-// Use webhook on Render, polling locally
-const isRender = process.env.RENDER === 'true';
-const botOptions = isRender
-  ? { webHook: { port: process.env.PORT || 3000 } }
-  : { polling: true };
+// Initialize without polling/webhook - server.js will handle webhook via express
+const bot = new TelegramBot(config.telegram.botToken, { polling: false, webHook: false });
 
-const bot = new TelegramBot(config.telegram.botToken, botOptions);
-
-// Set webhook URL if on Render
-if (isRender && process.env.RENDER_EXTERNAL_URL) {
-  const webhookUrl = process.env.RENDER_EXTERNAL_URL + '/bot' + config.telegram.botToken;
-  bot.setWebHook(webhookUrl).catch(err => {
-    console.error('[TelegramBot] Webhook error:', err.message);
-  });
+// Set webhook via Telegram API directly (no separate server needed)
+async function setupWebhook() {
+  if (process.env.RENDER === 'true' && process.env.RENDER_EXTERNAL_URL) {
+    const url = `https://api.telegram.org/bot${config.telegram.botToken}/setWebhook?url=${process.env.RENDER_EXTERNAL_URL}/bot${config.telegram.botToken}`;
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.ok) {
+        console.log('[TelegramBot] Webhook set successfully');
+      } else {
+        console.error('[TelegramBot] Webhook failed:', data.description);
+      }
+    } catch (err) {
+      console.error('[TelegramBot] Webhook error:', err.message);
+    }
+  }
 }
+
+setupWebhook();
 
 const CHAT_ID = config.telegram.chatId;
 const pendingAlerts = new Map();
