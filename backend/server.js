@@ -228,21 +228,26 @@ app.get('/cluster/:tokenAddress', async (req, res) => {
 db.connect().then(async () => {
   console.log('[Server] Database connected');
 
-  // Start token listener
-  const { startTokenListener } = require('./sentinel/token-listener');
-  startTokenListener().catch(err => {
-    console.error('[Server] Token listener failed:', err.message);
-  });
+  // Only start these services locally (port conflicts on Render)
+  if (process.env.RENDER !== 'true') {
+    // Start token listener
+    const { startTokenListener } = require('./sentinel/token-listener');
+    startTokenListener().catch(err => {
+      console.error('[Server] Token listener failed:', err.message);
+    });
 
-  // Start exit manager
+    // Start pre-launch monitor
+    const { startPreLaunchMonitor } = require('./prelaunch/tg-group-monitor');
+    startPreLaunchMonitor().catch(err => {
+      console.error('[Server] Pre-launch monitor failed:', err.message);
+    });
+  } else {
+    console.log('[Server] Running on Render - skipping WebSocket/gramJS services');
+  }
+
+  // Start exit manager (doesn't use ports)
   const { startExitManager } = require('./operator/exit-manager');
   startExitManager();
-
-  // Start pre-launch monitor
-  const { startPreLaunchMonitor } = require('./prelaunch/tg-group-monitor');
-  startPreLaunchMonitor().catch(err => {
-    console.error('[Server] Pre-launch monitor failed:', err.message);
-  });
 
   console.log('[Server] All services started');
 
