@@ -71,8 +71,8 @@ async function computeFinalScore(tokenAddress) {
       graduationInfo.graduationSignal === 'close_to_grad' ? 10 : 0;
 
     const vol = token?.volume_24h || 0;
-    const volBonus = vol >= 50000 ? 15 : vol >= 10000 ? 10 : vol >= 5000 ? 5 : vol >= 500 ? 2 : -10;
-    const multiSourceBonus = (token?.multi_volume?.volume_sources || 1) >= 2 ? 5 : 0;
+    const volBonus = vol >= 50000 ? 5 : vol >= 10000 ? 3 : vol >= 5000 ? 2 : vol >= 500 ? 1 : -5;
+    const multiSourceBonus = (token?.multi_volume?.volume_sources || 1) >= 2 ? 2 : 0;
 
     // Redistribute social weight when X/DeepSeek unavailable (social=0)
     const socialAvailable = social.socialScore > 0;
