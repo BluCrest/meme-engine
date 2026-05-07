@@ -204,9 +204,10 @@ async function autoBuyTopN(eligible, n) {
         }
         const exitMultiplier = Math.max(sellTarget * 0.985, 1.01);
 
+        const moonshotPct = result.moonshotProbability || result.deepseekAnalysis?.moonshot_probability || 0;
         await db.getDb().collection('positions').updateOne(
           { token_address: token.address, status: 'open' },
-          { $set: { sell_target_multiplier: exitMultiplier, sell_target_set_at: new Date(), auto_buy_score: score } }
+          { $set: { sell_target_multiplier: exitMultiplier, sell_target_set_at: new Date(), auto_buy_score: score, moonshot_probability: moonshotPct } }
         );
 
         const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\n${amount.toFixed(4)} SOL | Target: ${exitMultiplier.toFixed(2)}x | Score: ${score}%`;

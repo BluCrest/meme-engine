@@ -110,14 +110,21 @@ async function processExitsForPosition(position) {
       await db.updateHighestPrice(position._id, currentPrice);
     }
 
-    // 0. Sell target from auto-buy (highest priority after rug check)
+    // 0. Sell target from auto-buy — partial take-profit, let runners ride
     if (position.sell_target_multiplier && position.entry_price > 0) {
       const targetPrice = position.entry_price * position.sell_target_multiplier;
-      if (currentPrice >= targetPrice) {
-        await executeSell(position.token_address, 1.0, 'sell_target_hit');
-        const msg = `🎯 *SELL TARGET HIT* — ${(position.sell_target_multiplier).toFixed(2)}x target reached`;
-        await sendTelegramMessage(chatId, msg);
-        return;
+      if (currentPrice >= targetPrice && !position.sell_target_taken) {
+        // Moonshots sell less (20%), normal sell 33% — keep riding
+        const isMoonshot = (position.moonshot_probability || 0) > 50;
+        const sellRatio = isMoonshot ? 0.2 : 0.33;
+        await executeSell(position.token_address, sellRatio, 'sell_target_partial');
+        await db.getDb().collection('positions').updateOne(
+          { _id: position._id },
+          { $set: { sell_target_taken: true } }
+        );
+        const label = isMoonshot ? '🌙 Moonshot' : '🎯 Take-profit';
+        await sendTelegramMessage(chatId, `${label} — Sold ${(sellRatio * 100).toFixed(0)}% at ${position.sell_target_multiplier.toFixed(2)}x, rest riding`);
+        // Don't return — let other exit rules handle the rest
       }
     }
 
