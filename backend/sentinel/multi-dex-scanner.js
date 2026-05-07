@@ -38,6 +38,10 @@ async function scanDexScreener() {
       }
     }
 
+    // Merge both sources, deduplicate by address
+    const candidates = [];
+    const seen = new Set();
+
     // Collect from search results (already have MC + volume)
     if (searchData.pairs) {
       for (const pair of searchData.pairs) {
@@ -48,7 +52,7 @@ async function scanDexScreener() {
         const mc = pair.fdv || 0;
         if (mc > 10000 || mc < 1000) continue;
         const vol = pair.volume?.h24 || 0;
-        if (vol < 500) continue; // skip tokens with negligible volume
+        if (vol < 500) continue;
         candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc, volume: vol, dex: pair.dexId });
       }
     }
@@ -80,54 +84,6 @@ async function scanDexScreener() {
             const vol = pair.volume?.h24 || 0;
             if (vol < 500) continue;
             candidates.push({ addr, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name, mc, volume: vol, dex: pair.dexId || 'unknown' });
-          } catch (_) { /* skip if fetch fails */ }
-        }
-      }
-    }
-    }
-
-    // Merge both sources, deduplicate by address
-    const candidates = [];
-    const seen = new Set();
-
-    // Collect from search results (already have MC)
-    if (searchData.pairs) {
-      for (const pair of searchData.pairs) {
-        const addr = pair.baseToken?.address;
-        if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
-        if (seen.has(addr)) continue;
-        seen.add(addr);
-        const mc = pair.fdv || 0;
-        if (mc > 10000 || mc < 1000) continue;
-        candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc, dex: pair.dexId });
-      }
-    }
-
-    // Collect from profiles (may need individual MC fetch)
-    if (Array.isArray(profiles)) {
-      for (const profile of profiles) {
-        const addr = profile.tokenAddress;
-        if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
-        if (seen.has(addr)) continue;
-        seen.add(addr);
-
-        if (mcByAddress.has(addr)) {
-          // MC already known from search results
-          const mc = mcByAddress.get(addr);
-          if (mc > 10000 || mc < 1000) continue;
-          candidates.push({ addr, symbol: profile.symbol, name: profile.name, mc, dex: profile.dexId || 'unknown' });
-        } else {
-          // Need individual fetch — but skip if we already have enough
-          if (candidates.length > 30) continue;
-          await sleep(300); // 300ms gap to avoid rate limits
-          try {
-            const pairRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${addr}`);
-            const pairData = await pairRes.json();
-            const pair = pairData.pairs?.[0];
-            if (!pair) continue;
-            const mc = pair.fdv || 0;
-            if (mc > 10000 || mc < 1000) continue;
-            candidates.push({ addr, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name, mc, dex: pair.dexId || 'unknown' });
           } catch (_) { /* skip if fetch fails */ }
         }
       }
