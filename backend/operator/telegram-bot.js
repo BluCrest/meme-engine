@@ -113,6 +113,7 @@ async function flushTopAlerts() {
   const now = Date.now();
   const fresh = queuedAlerts.filter(a => now - a.time < 300000);
   queuedAlerts.length = 0;
+  console.log(`[AlertBatcher] ${fresh.length} queued, filtering for >= ${ALERT_THRESHOLD}%...`);
 
   const eligible = fresh
     .filter(a => a.result.apeProbability >= ALERT_THRESHOLD)
@@ -148,32 +149,67 @@ async function flushTopAlerts() {
 }
 
 async function autoBuyTopN(eligible, n) {
-  const { executeBuy } = require('./trade-executor');
-  const top = eligible.slice(0, n);
+  const { executeBuy, getBalance } = require('./trade-executor');
+  const db = require('../database/db');
+
+  // Safety gates
+  const safe = eligible.filter(e => {
+    const r = e.result;
+    if (r.bundleInfo?.bundleDetected) return false;
+    if (r.clusterAnalysis?.clusterRisk === 'high') return false;
+    if (r.safety?.safetyScore < 40) return false;
+    if (r.divergenceCheck?.divergenceScore > 50) return false;
+    return true;
+  });
+
+  if (!safe.length) return;
+
+  // Check current open positions count and total invested
+  const openPositions = await db.getOpenPositions();
+  const MAX_POSITIONS = 5;
+  const MAX_PORTFOLIO_PCT = 0.5;
+  if (openPositions.length >= MAX_POSITIONS) {
+    console.log(`[AutoBuy] ${openPositions.length} positions open, skipping buy (max ${MAX_POSITIONS})`);
+    return;
+  }
+  const totalInvested = openPositions.reduce((s, p) => s + (p.sol_invested || 0), 0);
+  const bal = await getBalance();
+  const availableBudget = bal * MAX_PORTFOLIO_PCT - totalInvested;
+  if (availableBudget <= 0.001) {
+    console.log(`[AutoBuy] Budget used (${totalInvested.toFixed(3)}/${(bal * MAX_PORTFOLIO_PCT).toFixed(3)} SOL), skipping`);
+    return;
+  }
+
+  const top = safe.slice(0, n);
 
   for (const { token, result } of top) {
     try {
-      const buyResult = await executeBuy(token.address, 'auto_signal');
+      // Confidence-based sizing: higher score = bigger allocation
+      const score = result.apeProbability;
+      const sizeMultiplier = score >= 90 ? 1.5 : score >= 80 ? 1.0 : 0.5;
+      const maxPerTrade = config.config.maxSolPerTrade || 0.1;
+      const amount = Math.min(maxPerTrade * sizeMultiplier, availableBudget / top.length);
+      if (amount < 0.001) continue;
+
+      const buyResult = await executeBuy(token.address, 'auto_signal', amount);
       if (buyResult.success) {
-        // Compute sell target from deepseek suggested exits or fallback from apeProbability
+        // Sell target: conservative when DeepSeek is unavailable
         const targets = result.deepseekAnalysis?.suggested_exit_targets;
         let sellTarget;
         if (Array.isArray(targets) && targets.length) {
           sellTarget = targets.reduce((a, b) => a + b, 0) / targets.length;
         } else {
-          sellTarget = 1 + result.apeProbability / 50; // e.g. 80% → 2.6x, 95% → 2.9x
+          // Without DeepSeek: map score to a conservative target
+          sellTarget = 1 + score / 60; // 67% → 2.1x, 80% → 2.3x, 95% → 2.6x
         }
-        // Apply 1.5% buffer below target
         const exitMultiplier = Math.max(sellTarget * 0.985, 1.01);
 
-        // Store sell target on the position via DB
-        const db = require('../database/db');
         await db.getDb().collection('positions').updateOne(
           { token_address: token.address, status: 'open' },
-          { $set: { sell_target_multiplier: exitMultiplier, sell_target_set_at: new Date() } }
+          { $set: { sell_target_multiplier: exitMultiplier, sell_target_set_at: new Date(), auto_buy_score: score } }
         );
 
-        const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\nTarget: ${exitMultiplier.toFixed(2)}x | Score: ${result.apeProbability}%`;
+        const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\n${amount.toFixed(4)} SOL | Target: ${exitMultiplier.toFixed(2)}x | Score: ${score}%`;
         await sendTelegram('sendMessage', { chat_id: CHAT_ID, text: notifyMsg, parse_mode: 'Markdown' });
       }
     } catch (e) {
