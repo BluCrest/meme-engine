@@ -16,13 +16,10 @@ app.get('/health', (req, res) => {
 });
 
 // Telegram webhook - set up on Render
-const { bot } = require('./operator/telegram-bot');
+const { bot, setupWebhook } = require('./operator/telegram-bot');
 if (process.env.RENDER === 'true' && process.env.RENDER_EXTERNAL_URL) {
   const webhookUrl = process.env.RENDER_EXTERNAL_URL + '/bot' + config.telegram.botToken;
-  bot.setWebHook(webhookUrl).catch(err => {
-    console.error('[TelegramBot] Webhook error:', err.message);
-  });
-  console.log('[TelegramBot] Webhook set:', webhookUrl);
+  setupWebhook(webhookUrl);
 }
 
 app.post('/bot:token', (req, res) => {
