@@ -7,6 +7,7 @@ const { detectBundles } = require('../sentinel/bundle-detector');
 const { getBondingCurveProgress } = require('./graduation-tracker');
 const { checkMomentumDivergence } = require('../detective/momentum-divergence');
 const { findMatchingPatterns } = require('./pattern-matcher');
+const { getMultiSourceVolume } = require('../utils/multi-volume');
 const db = require('../database/db');
 
 async function getDevWallet(tokenAddress) {
@@ -21,6 +22,12 @@ async function computeFinalScore(tokenAddress) {
     }
     const token = await db.getToken(tokenAddress);
     const symbol = token?.symbol || 'UNKNOWN';
+
+    // Enrich volume data from multiple sources (DexPaprika, GMGN, DexScreener)
+    const multiVol = await getMultiSourceVolume(tokenAddress, token?.volume_24h || 0);
+    if (multiVol.volume_sources > 1) {
+      await db.upsertToken({ address: tokenAddress, volume_24h: multiVol.volume_24h, multi_volume: multiVol });
+    }
 
     // Serialize checks to avoid RPC rate limits (was Promise.all — 20+ parallel calls)
     const safety = await runSafetyCheck(tokenAddress);
@@ -58,6 +65,7 @@ async function computeFinalScore(tokenAddress) {
 
     const vol = token?.volume_24h || 0;
     const volBonus = vol >= 50000 ? 15 : vol >= 10000 ? 10 : vol >= 5000 ? 5 : vol >= 500 ? 2 : -10;
+    const multiSourceBonus = (token?.multi_volume?.volume_sources || 1) >= 2 ? 5 : 0;
 
     // Redistribute social weight when X/DeepSeek unavailable (social=0)
     const socialAvailable = social.socialScore > 0;
@@ -69,7 +77,8 @@ async function computeFinalScore(tokenAddress) {
       smartMoney.smartMoneyScore * smartWeight +
       devModifier * 15 +
       gradBonus +
-      volBonus
+      volBonus +
+      multiSourceBonus
     );
 
     if (bundleInfo.bundleDetected) apeProbability *= 0.6;

@@ -218,7 +218,7 @@ async function autoBuyTopN(eligible, n) {
           { $set: { sell_target_multiplier: exitMultiplier, sell_target_set_at: new Date(), auto_buy_score: score, moonshot_probability: moonshotPct } }
         );
 
-        const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\n${amount.toFixed(4)} SOL | Target: ${exitMultiplier.toFixed(2)}x | Score: ${score}%`;
+        const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\n${amount.toFixed(4)} SOL | Target: ${exitMultiplier.toFixed(2)}x | Score: ${score}% | Vol: $${formatMC(token.volume_24h || 0)}`;
         await sendTelegram('sendMessage', { chat_id: CHAT_ID, text: notifyMsg, parse_mode: 'Markdown' });
       }
     } catch (e) {
