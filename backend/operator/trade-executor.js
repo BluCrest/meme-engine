@@ -100,32 +100,46 @@ async function executeJupiterSwap(quoteResp, userPk) {
 async function executeBuy(tokenAddr, mode, amountSol) {
   mode = mode || 'manual_confirm';
   amountSol = amountSol || config.config.maxSolPerTrade;
-  const MIN_BUY = 0.002; // Minimum buy amount (scaled for small wallets)
-  const GAS_RESERVE = 0.01; // Keep for gas fees
+  const MIN_BUY = 0.002;
+  const GAS_RESERVE = 0.01;
 
   try {
     if (!walletKeypair) throw new Error('Wallet not initialized');
     let bal = await getBalance();
 
-    // Scale down if balance is low
     if (bal < amountSol + GAS_RESERVE) {
       const scaledAmount = (bal - GAS_RESERVE) / 4;
       amountSol = Math.max(scaledAmount, MIN_BUY);
       console.log(`[Executor] Scaled buy to ${amountSol.toFixed(6)} SOL (balance: ${bal.toFixed(6)})`);
     }
 
-    if (amountSol < MIN_BUY) throw new Error('Balance too low: ' + bal.toFixed(4) + ' SOL (need >= ' + (MIN_BUY + GAS_RESERVE).toFixed(3) + ')');
+    if (amountSol < MIN_BUY) throw new Error('Balance too low: ' + bal.toFixed(4) + ' SOL');
+
+    let sig, tokenAmt;
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+
+    // Strategy 1: Try Jupiter (works for listed tokens)
     const quote = await getJupiterQuote(SOL_MINT, tokenAddr, lamports);
-    if (!quote || quote.error) throw new Error('No route: ' + (quote?.error || 'Unknown'));
-    const swapRes = await executeJupiterSwap(quote, walletKeypair.publicKey);
-    const buf = Buffer.from(swapRes.swapTransaction, 'base64');
-    const tx = VersionedTransaction.deserialize(buf);
-    tx.sign([walletKeypair]);
-    const sig = await connection.sendTransaction(tx, { maxRetries: 3 });
-    const conf = await connection.confirmTransaction(sig, 'confirmed');
-    if (conf.value.err) throw new Error('TX failed: ' + JSON.stringify(conf.value.err));
-    const tokenAmt = parseInt(quote.outAmount) / 1e6;
+    if (quote && !quote.error) {
+      const swapRes = await executeJupiterSwap(quote, walletKeypair.publicKey);
+      const buf = Buffer.from(swapRes.swapTransaction, 'base64');
+      const tx = VersionedTransaction.deserialize(buf);
+      tx.sign([walletKeypair]);
+      sig = await connection.sendTransaction(tx, { maxRetries: 3 });
+      const conf = await connection.confirmTransaction(sig, 'confirmed');
+      if (conf.value.err) throw new Error('TX failed: ' + JSON.stringify(conf.value.err));
+      tokenAmt = parseInt(quote.outAmount) / 1e6;
+      console.log(`[Executor] Jupiter buy: ${sig}`);
+    } else {
+      // Strategy 2: Try Pump.fun bonding curve (for pre-graduation tokens)
+      const { pumpBuy, isOnBondingCurve } = require('../utils/pump-swap');
+      const onCurve = await isOnBondingCurve(tokenAddr);
+      if (!onCurve) throw new Error('No route (Jupiter + Pump.fun both unavailable)');
+      const result = await pumpBuy(walletKeypair, tokenAddr, amountSol);
+      sig = result.signature;
+      tokenAmt = amountSol / 0.0001; // rough estimate (actual amount from event)
+      console.log(`[Executor] Pump.fun buy: ${sig}`);
+    }
     const price = await getCurrentPrice(tokenAddr);
     const mc = await getCurrentMC(tokenAddr);
     const trade = {
@@ -185,17 +199,26 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     }
     const sellAmt = bal * sellRatio;
     if (sellAmt <= 0) throw new Error('Nothing to sell');
-    const quote = await getJupiterQuote(tokenAddr, SOL_MINT, Math.floor(sellAmt * 1e6), 500);
-    if (!quote || quote.error) throw new Error('No sell route: ' + (quote?.error || 'Unknown'));
-    const swapRes = await executeJupiterSwap(quote, walletKeypair.publicKey);
-    const buf = Buffer.from(swapRes.swapTransaction, 'base64');
-    const tx = VersionedTransaction.deserialize(buf);
-    tx.sign([walletKeypair]);
-    const sig = await connection.sendTransaction(tx, { maxRetries: 3 });
-    await connection.confirmTransaction(sig, 'confirmed');
-    const price = await getCurrentPrice(tokenAddr);
-    const mc = await getCurrentMC(tokenAddr);
-    const solVal = parseInt(quote.outAmount) / LAMPORTS_PER_SOL;
+    const sellLamports = Math.floor(sellAmt * 1e6);
+    const quote = await getJupiterQuote(tokenAddr, SOL_MINT, sellLamports, 500);
+    let sig, solVal;
+    if (quote && !quote.error) {
+      const swapRes = await executeJupiterSwap(quote, walletKeypair.publicKey);
+      const buf = Buffer.from(swapRes.swapTransaction, 'base64');
+      const tx = VersionedTransaction.deserialize(buf);
+      tx.sign([walletKeypair]);
+      sig = await connection.sendTransaction(tx, { maxRetries: 3 });
+      await connection.confirmTransaction(sig, 'confirmed');
+      solVal = parseInt(quote.outAmount) / LAMPORTS_PER_SOL;
+    } else {
+      // Try Pump.fun sell
+      const { pumpSell, isOnBondingCurve } = require('../utils/pump-swap');
+      const onCurve = await isOnBondingCurve(tokenAddr);
+      if (!onCurve) throw new Error('No sell route');
+      const result = await pumpSell(walletKeypair, tokenAddr, sellAmt);
+      sig = result.signature;
+      solVal = sellAmt * 0.9; // rough estimate after fees
+    }
     const trade = {
       token_address: tokenAddr,
       action: 'sell',
