@@ -5,7 +5,7 @@ const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-const ALERT_THRESHOLD = 67;
+const ALERT_THRESHOLD = 50;
 const MAX_ALERTS = 20;
 
 const pendingAlerts = new Map();
@@ -221,7 +221,7 @@ async function autoBuyTopN(eligible, n) {
 
 function startAlertBatcher() {
   setInterval(flushTopAlerts, 300000);
-  console.log('[Telegram] Alert batcher started (every 5 min, top 20 >= 67%)');
+  console.log('[Telegram] Alert batcher started (every 5 min, top 20 >= 50%)');
 }
 
 // Handle /start command and other messages
@@ -235,7 +235,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\nI will send the top 20 tokens scoring 67%+ every 5 minutes. Top 2 auto-bought. Sell targets set from AI analysis.\n\nCommands:\n/portfolio - Check wallet balance\n/positions - View open positions\n/pnl - View P&L summary',
+      text: '🚀 *Meme Engine Active!*\n\nI will send the top 20 tokens every 5 minutes. Top 2 auto-bought. Sell targets set from analysis.\n\nCommands:\n/portfolio - Check wallet balance\n/positions - View open positions\n/pnl - View P&L summary',
       parse_mode: 'Markdown'
     });
   }

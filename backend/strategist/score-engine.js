@@ -56,10 +56,14 @@ async function computeFinalScore(tokenAddress) {
       graduationInfo.graduationSignal === 'graduating_now' ? 20 :
       graduationInfo.graduationSignal === 'close_to_grad' ? 10 : 0;
 
+    // Redistribute social weight when X/DeepSeek unavailable (social=0)
+    const socialAvailable = social.socialScore > 0;
+    const safetyWeight = socialAvailable ? 0.35 : 0.50;
+    const smartWeight = socialAvailable ? 0.25 : 0.35;
     let apeProbability = Math.min(100,
-      safety.safetyScore * 0.35 +
+      safety.safetyScore * safetyWeight +
       social.socialScore * 0.25 +
-      smartMoney.smartMoneyScore * 0.25 +
+      smartMoney.smartMoneyScore * smartWeight +
       devModifier * 15 +
       gradBonus
     );
