@@ -1,19 +1,13 @@
-const { TelegramClient } = require('telegram');
-const { StringSession } = require('telegram/sessions');
 const config = require('../config');
 const { preloadDevProfile } = require('./dev-preseeder');
 const { sendPreLaunchAlert } = require('./prelaunch-alert');
 const db = require('../database/db');
 
-let client;
-
-// Groups to monitor — update as you find more active launch groups
-// Use chat IDs (numbers) instead of usernames to avoid resolution errors
-// Get chat IDs by running: node -e "console.log(event.message?.peerId?.channelId)"
-const MONITORED_GROUPS = [
-  // Add chat IDs here after joining the groups
-  // Example: -1001234567890
-];
+// Use HTTP polling instead of gramJS (no port conflicts)
+const BOT_TOKEN = config.telegram.botToken;
+const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
+let lastUpdateId = 0;
+let isPolling = false;
 
 // Patterns that suggest an imminent Pump.fun launch
 const LAUNCH_PATTERNS = [
@@ -31,82 +25,104 @@ function isValidSolanaAddress(str) {
   return /^[A-Za-z0-9]{32,44}$/.test(str);
 }
 
+async function sendTelegramRequest(method, data = {}) {
+  try {
+    const url = `${API_BASE}/${method}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('[PreLaunch] Error:', err.message);
+    return null;
+  }
+}
+
 async function startPreLaunchMonitor() {
-  client = new TelegramClient(
-    new StringSession(config.telegram.sessionString),
-    parseInt(config.telegram.apiId),
-    config.telegram.apiHash,
-    { connectionRetries: 5 }
-  );
+  console.log('[PreLaunch] Starting HTTP polling for Telegram messages...');
 
-  await client.connect();
-  console.log('[PreLaunch] Connected to Telegram, monitoring groups...');
+  // Get chat IDs first by asking user to send a message
+  console.log('[PreLaunch] Make sure bot is added to groups, then it will auto-detect messages');
 
-  // Import event handler dynamically
-  const { NewMessage } = require('telegram/events');
+  pollUpdates();
+}
 
-  client.addEventHandler(async (event) => {
-    try {
-      const message = event.message?.message;
-      const chatId = event.message?.peerId?.channelId;
+async function pollUpdates() {
+  if (isPolling) return;
+  isPolling = true;
 
-      if (!message) return;
+  try {
+    const data = await sendTelegramRequest('getUpdates', {
+      offset: lastUpdateId + 1,
+      timeout: 30,
+      allowed_updates: ['message']
+    });
 
-      // Check if message matches any launch pattern
-      const isLaunchSignal = LAUNCH_PATTERNS.some(pattern => pattern.test(message));
-      if (!isLaunchSignal) return;
+    if (data?.result) {
+      for (const update of data.result) {
+        lastUpdateId = update.update_id;
 
-      console.log(`[PreLaunch] Launch signal detected in group ${chatId}`);
+        const message = update.message?.text;
+        const chatId = update.message?.chat?.id;
 
-      // Try to extract dev wallet from message
-      const walletMatches = message.match(/[A-Za-z0-9]{32,44}/g);
-      const potentialWallets = walletMatches?.filter(w => isValidSolanaAddress(w)) || [];
+        if (!message) continue;
 
-      // Extract token name/symbol
-      const symbolMatch = message.match(/\$([A-Z]{2,10})/);
-      const nameMatch = message.match(/["']([^"']{2,30})["']/);
+        // Check if message matches any launch pattern
+        const isLaunchSignal = LAUNCH_PATTERNS.some(pattern => pattern.test(message));
+        if (!isLaunchSignal) continue;
 
-      // For each potential dev wallet, pre-load their profile immediately
-      for (const wallet of potentialWallets) {
-        await preloadDevProfile(wallet);
+        console.log(`[PreLaunch] Launch signal detected in chat ${chatId}`);
+
+        // Try to extract dev wallet from message
+        const walletMatches = message.match(/[A-Za-z0-9]{32,44}/g);
+        const potentialWallets = walletMatches?.filter(w => isValidSolanaAddress(w)) || [];
+
+        // Extract token name/symbol
+        const symbolMatch = message.match(/\$([A-Z]{2,10})/);
+        const nameMatch = message.match(/["']([^"']{2,30})["']/);
+
+        // For each potential dev wallet, pre-load their profile immediately
+        for (const wallet of potentialWallets) {
+          await preloadDevProfile(wallet);
+        }
+
+        // Log the detection
+        await db.insertPrelaunchDetection({
+          dev_wallet: potentialWallets[0] || null,
+          token_name: nameMatch?.[1] || null,
+          token_symbol: symbolMatch?.[1] || null,
+          detected_at: new Date(),
+          tg_group: chatId?.toString(),
+          tg_message: message.substring(0, 500),
+          dev_profile_preloaded: potentialWallets.length > 0,
+          token_address: null,
+          went_live_at: null,
+          lead_time_seconds: 0
+        });
+
+        // Send alert to your Telegram
+        await sendPreLaunchAlert({
+          message,
+          potentialWallets,
+          symbol: symbolMatch?.[1],
+          name: nameMatch?.[1],
+          chatId: chatId?.toString()
+        });
       }
-
-      // Log the detection
-      await db.insertPrelaunchDetection({
-        dev_wallet: potentialWallets[0] || null,
-        token_name: nameMatch?.[1] || null,
-        token_symbol: symbolMatch?.[1] || null,
-        detected_at: new Date(),
-        tg_group: chatId?.toString(),
-        tg_message: message.substring(0, 500),
-        dev_profile_preloaded: potentialWallets.length > 0,
-        token_address: null,
-        went_live_at: null,
-        lead_time_seconds: 0
-      });
-
-      // Send alert to your Telegram
-      await sendPreLaunchAlert({
-        message,
-        potentialWallets,
-        symbol: symbolMatch?.[1],
-        name: nameMatch?.[1],
-        chatId: chatId?.toString()
-      });
-
-    } catch (err) {
-      console.error('[PreLaunch] Error handling message:', err.message);
     }
-  }, new NewMessage({ chats: MONITORED_GROUPS }));
+  } catch (err) {
+    console.error('[PreLaunch] Poll error:', err.message);
+  }
 
-  console.log('[PreLaunch] Monitoring:', MONITORED_GROUPS);
+  isPolling = false;
+  // Continue polling
+  setTimeout(pollUpdates, 1000);
 }
 
 async function stopPreLaunchMonitor() {
-  if (client) {
-    await client.disconnect();
-    console.log('[PreLaunch] Disconnected');
-  }
+  console.log('[PreLaunch] Stopping...');
 }
 
 module.exports = { startPreLaunchMonitor, stopPreLaunchMonitor };

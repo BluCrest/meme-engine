@@ -15,16 +15,35 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Telegram webhook - set up on Render
-const { bot, setupWebhook } = require('./operator/telegram-bot');
-if (process.env.RENDER === 'true' && process.env.RENDER_EXTERNAL_URL) {
-  const webhookUrl = process.env.RENDER_EXTERNAL_URL + '/bot' + config.telegram.botToken;
-  setupWebhook(webhookUrl);
-}
+// Telegram bot uses direct API calls - no webhook needed
+const { sendTokenAlert } = require('./operator/telegram-bot');
 
-app.post('/bot:token', (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
+// Health check with status details
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'meme-engine running',
+    services: {
+      exitManager: 'running',
+      telegram: 'active',
+      render: process.env.RENDER === 'true'
+    }
+  });
+});
+
+// Telegram callback handler (for button clicks)
+app.post('/telegram/callback', async (req, res) => {
+  try {
+    const { callback_query } = req.body;
+    if (!callback_query) return res.sendStatus(200);
+
+    const { handleCallback } = require('./operator/telegram-bot-callbacks');
+    await handleCallback(callback_query);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('[Server] Callback error:', err.message);
+    res.sendStatus(500);
+  }
 });
 
 // Manual safety check endpoint

@@ -1,30 +1,10 @@
-const TelegramBot = require('node-telegram-bot-api');
 const config = require('../config');
 const db = require('../database/db');
 
-// Just use the bot for sending messages - no polling/webhook server needed
-// Webhook will be handled by Express in server.js
-const bot = new TelegramBot(config.telegram.botToken, { polling: false, webHook: false });
-
-// Helper to set webhook (called from server.js after Express starts)
-async function setupWebhook(webhookUrl) {
-  try {
-    const url = `https://api.telegram.org/bot${config.telegram.botToken}/setWebhook?url=${webhookUrl}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data.ok) {
-      console.log('[TelegramBot] Webhook set:', webhookUrl);
-    } else {
-      console.error('[TelegramBot] Webhook failed:', data.description);
-    }
-  } catch (err) {
-    console.error('[TelegramBot] Webhook error:', err.message);
-  }
-}
-
-module.exports = { sendTokenAlert, bot, setupWebhook };
-
+const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
+const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
 const pendingAlerts = new Map();
 
 function formatMC(mc) {
@@ -37,6 +17,21 @@ function formatMC(mc) {
 function getProgressBar(pct) {
   const filled = Math.round(pct / 10);
   return '█'.repeat(filled) + '░'.repeat(10 - filled);
+}
+
+async function sendTelegram(method, data = {}) {
+  try {
+    const url = `${API_BASE}/${method}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('[TelegramBot] Error:', err.message);
+    return null;
+  }
 }
 
 async function sendTokenAlert(token, scores, devProfile, deepseekAnalysis) {
@@ -62,97 +57,46 @@ ${riskEmoji} Safety: ${scores.safetyScore}/100
 🎯 *PROBABILITIES*
 Ape In: *${scores.apeProbability}%*
 Moonshot: *${scores.moonshotProbability}%*
-Absolute Nuke: *${scores.absoluteMoonshotProbability || 0}%
+Absolute Nuke: *${scores.absoluteMoonshotProbability || 0}%*
 
 👨‍💻 *DEV PROFILE*
 Type: ${devProfile?.label || 'unknown'}
 Launches: ${devProfile?.total_launches || 0} | Rugs: ${devProfile?.rug_count || 0}
 Avg Peak Return: *${(devProfile?.avg_return_at_peak || 0).toFixed(1)}x*
 Rep Score: ${devProfile?.reputation_score || 0}/100
-${devProfile?.cross_chain_flag ? `⛓️ Cross-chain rugs: ${devProfile.cross_chain_rugs || 0}` : ''}
 
-⚠️ *RED FLAGS*
-${deepseekAnalysis?.redFlags?.map(f => `• ${f}`).join('\n') || '• None detected'}
-
-✅ *KEY SIGNALS*
-${deepseekAnalysis?.keySignals?.map(s => `• ${s}`).join('\n') || '• None'}
-
-🤖 *AI REASONING*
+📝 *DEEPSEEK ANALYSIS*
 ${deepseekAnalysis?.reasoning || 'N/A'}
 
-*Confidence:* ${deepseekAnalysis?.confidence || 0}%
-
-━━━━━━━━━━━━━━━━━━━━
-*Suggested Entry:* ${formatMC(deepseekAnalysis?.suggestedEntryMC)}
-*Exit Targets:* ${deepseekAnalysis?.suggestedExitTargets?.join(' → ') || 'N/A'}
+*CA:* \`${token.address}\`
 ━━━━━━━━━━━━━━━━━━━━
 `;
 
-  pendingAlerts.set(token.address, {
-    token,
-    scores,
-    timeout: setTimeout(() => autoExecute(token.address), 10000)
-  });
-
-  const keyboard = {
-    inline_keyboard: [[
-      { text: '✅ APE IN', callback_data: `ape_${token.address}` },
-      { text: '👀 WATCHLIST', callback_data: `watch_${token.address}` },
-      { text: '❌ SKIP', callback_data: `skip_${token.address}` }
-    ], [
-      { text: '📊 FULL REPORT', callback_data: `report_${token.address}` },
-      { text: '🔍 DEV HISTORY', callback_data: `dev_${token.address}` }
-    ]]
+  const buttons = {
+    inline_keyboard: [
+      [
+        { text: '✅ Ape In', callback_data: `ape_${token.address}` },
+        { text: '❌ Skip', callback_data: `skip_${token.address}` }
+      ],
+      [
+        { text: '📊 Full Report', callback_data: `report_${token.address}` },
+        { text: '👨‍💻 Dev History', callback_data: `dev_${token.address}` }
+      ]
+    ]
   };
 
-  await bot.sendMessage(CHAT_ID, message, {
+  const result = await sendTelegram('sendMessage', {
+    chat_id: CHAT_ID,
+    text: message,
     parse_mode: 'Markdown',
-    reply_markup: keyboard
+    reply_markup: buttons
   });
+
+  if (result?.result?.message_id) {
+    pendingAlerts.set(token.address, result.result.message_id);
+  }
+
+  return result;
 }
 
-async function autoExecute(tokenAddress) {
-  const pending = pendingAlerts.get(tokenAddress);
-  if (!pending) return;
-
-  const token = await db.getToken(tokenAddress);
-  if (token?.ape_probability >= config.config.autoExecuteProbability) {
-    // TODO: executeBuy(tokenAddress, 'auto_timeout');
-    await bot.sendMessage(CHAT_ID, `🤖 *AUTO-BOUGHT* $${token.symbol} — no response in 10s`, { parse_mode: 'Markdown' });
-  } else {
-    await bot.sendMessage(CHAT_ID, `⏰ *Alert expired* — $${token?.symbol} not auto-bought (prob < ${config.config.autoExecuteProbability}%)`, { parse_mode: 'Markdown' });
-  }
-  pendingAlerts.delete(tokenAddress);
-}
-
-// Callback handlers
-bot.on('callback_query', async (query) => {
-  const [action, address] = query.data.split('_');
-  const pending = pendingAlerts.get(address);
-
-  if (pending) clearTimeout(pending.timeout);
-
-  switch(action) {
-    case 'ape':
-      // TODO: await executeBuy(address, 'manual_confirm');
-      await bot.answerCallbackQuery(query.id, { text: '✅ Buying...' });
-      break;
-    case 'watch':
-      await db.upsertToken({ address, status: 'watchlist' });
-      await bot.answerCallbackQuery(query.id, { text: '👀 Added to watchlist' });
-      break;
-    case 'skip':
-      await db.upsertToken({ address, status: 'passed' });
-      await bot.answerCallbackQuery(query.id, { text: '❌ Skipped' });
-      break;
-    case 'report':
-      // TODO: await sendFullReport(query.message.chat.id, address);
-      break;
-    case 'dev':
-      // TODO: await sendDevHistory(query.message.chat.id, address);
-      break;
-  }
-  pendingAlerts.delete(address);
-});
-
-module.exports = { sendTokenAlert, bot };
+module.exports = { sendTokenAlert };

@@ -16,7 +16,8 @@ async function startTokenListener() {
 
   // Use Helius WebSocket for real-time token detection
   try {
-    const ws = new WebSocket(`wss://mainnet.helius-rpc.com/?api-key=${config.helius.apiKey}`);
+    const wsUrl = config.helius.rpcUrl?.replace('https://', 'wss://') || `wss://mainnet.helius-rpc.com/?api-key=${config.helius.apiKey}`;
+    const ws = new WebSocket(wsUrl);
 
     ws.on('open', () => {
       console.log('[Sentinel] WebSocket connected');
