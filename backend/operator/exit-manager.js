@@ -12,9 +12,8 @@ const EXIT_RULES = [
 ];
 
 async function getCurrentPrice(tokenAddress) {
-  // TODO: Fetch from DexScreener API
-  // const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-  return 0; // placeholder
+  const pf = require('../utils/price-feed');
+  return pf.getCurrentPrice(tokenAddress);
 }
 
 async function getDevWallet(tokenAddress) {
@@ -100,7 +99,6 @@ async function momentumDivergenceExit(tokenAddress, position, currentPrice) {
 }
 
 async function processExitsForPosition(position) {
-  const bot = require('./telegram-bot').bot;
   const chatId = config.telegram.chatId;
 
   try {
@@ -112,20 +110,31 @@ async function processExitsForPosition(position) {
       await db.updateHighestPrice(position._id, currentPrice);
     }
 
+    // 0. Sell target from auto-buy (highest priority after rug check)
+    if (position.sell_target_multiplier && position.entry_price > 0) {
+      const targetPrice = position.entry_price * position.sell_target_multiplier;
+      if (currentPrice >= targetPrice) {
+        await executeSell(position.token_address, 1.0, 'sell_target_hit');
+        const msg = `🎯 *SELL TARGET HIT* — ${(position.sell_target_multiplier).toFixed(2)}x target reached`;
+        await sendTelegramMessage(chatId, msg);
+        return;
+      }
+    }
+
     // 1. Rug Speed Predictor (highest priority)
     const devWallet = await getDevWallet(position.token_address);
     const rugCheck = await rugSpeedPredictor(position, devWallet);
     if (rugCheck) {
       await executeSell(position.token_address, 1.0, rugCheck.reason);
-      await bot.sendMessage(chatId, rugCheck.message, { parse_mode: 'Markdown' });
+      await sendTelegramMessage(chatId, rugCheck.message);
       return;
     }
 
     // 2. Momentum Divergence Exit
     const divergenceExit = await momentumDivergenceExit(position.token_address, position, currentPrice);
     if (divergenceExit) {
-      await executeSell(position.token_address, 0.5, divergenceExit.reason); // Sell half on divergence
-      await bot.sendMessage(chatId, divergenceExit.message, { parse_mode: 'Markdown' });
+      await executeSell(position.token_address, 0.5, divergenceExit.reason);
+      await sendTelegramMessage(chatId, divergenceExit.message);
     }
 
     // 3. Exit Rules (scaling sells)
@@ -139,7 +148,7 @@ async function processExitsForPosition(position) {
         exit_mc: currentPrice,
         mc_at_trade: currentPrice
       });
-      await bot.sendMessage(chatId, `${exitRule.message}\n\n${card}`, { parse_mode: 'Markdown' });
+      await sendTelegramMessage(chatId, `${exitRule.message}\n\n${card}`);
       return;
     }
 
@@ -147,12 +156,23 @@ async function processExitsForPosition(position) {
     const trailing = await trailingStopCheck(position, currentPrice);
     if (trailing) {
       await executeSell(position.token_address, 1.0, trailing.reason);
-      await bot.sendMessage(chatId, trailing.message, { parse_mode: 'Markdown' });
+      await sendTelegramMessage(chatId, trailing.message);
     }
 
   } catch (err) {
     console.error(`[ExitMgr] Error processing ${position.token_address}:`, err.message);
   }
+}
+
+async function sendTelegramMessage(chatId, text) {
+  try {
+    const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
+    });
+  } catch (_) {}
 }
 
 async function runExitManager() {

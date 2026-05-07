@@ -5,8 +5,8 @@ const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-const ALERT_THRESHOLD = 80;
-const MAX_ALERTS = 5;
+const ALERT_THRESHOLD = 67;
+const MAX_ALERTS = 20;
 
 const pendingAlerts = new Map();
 const queuedAlerts = [];
@@ -111,7 +111,7 @@ async function flushTopAlerts() {
   if (!queuedAlerts.length) return;
 
   const now = Date.now();
-  const fresh = queuedAlerts.filter(a => now - a.time < 300000); // Drop older than 5 min
+  const fresh = queuedAlerts.filter(a => now - a.time < 300000);
   queuedAlerts.length = 0;
 
   const eligible = fresh
@@ -142,11 +142,49 @@ async function flushTopAlerts() {
     text: message,
     parse_mode: 'Markdown'
   });
+
+  // Auto-buy top 2 tokens from this batch
+  await autoBuyTopN(eligible, 2);
+}
+
+async function autoBuyTopN(eligible, n) {
+  const { executeBuy } = require('./trade-executor');
+  const top = eligible.slice(0, n);
+
+  for (const { token, result } of top) {
+    try {
+      const buyResult = await executeBuy(token.address, 'auto_signal');
+      if (buyResult.success) {
+        // Compute sell target from deepseek suggested exits or fallback from apeProbability
+        const targets = result.deepseekAnalysis?.suggested_exit_targets;
+        let sellTarget;
+        if (Array.isArray(targets) && targets.length) {
+          sellTarget = targets.reduce((a, b) => a + b, 0) / targets.length;
+        } else {
+          sellTarget = 1 + result.apeProbability / 50; // e.g. 80% → 2.6x, 95% → 2.9x
+        }
+        // Apply 1.5% buffer below target
+        const exitMultiplier = Math.max(sellTarget * 0.985, 1.01);
+
+        // Store sell target on the position via DB
+        const db = require('../database/db');
+        await db.getDb().collection('positions').updateOne(
+          { token_address: token.address, status: 'open' },
+          { $set: { sell_target_multiplier: exitMultiplier, sell_target_set_at: new Date() } }
+        );
+
+        const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\nTarget: ${exitMultiplier.toFixed(2)}x | Score: ${result.apeProbability}%`;
+        await sendTelegram('sendMessage', { chat_id: CHAT_ID, text: notifyMsg, parse_mode: 'Markdown' });
+      }
+    } catch (e) {
+      console.error(`[AutoBuy] Failed ${token.address}:`, e.message);
+    }
+  }
 }
 
 function startAlertBatcher() {
-  setInterval(flushTopAlerts, 60000);
-  console.log('[Telegram] Alert batcher started (every 60s, top 5 >= 80%)');
+  setInterval(flushTopAlerts, 300000);
+  console.log('[Telegram] Alert batcher started (every 5 min, top 20 >= 67%)');
 }
 
 // Handle /start command and other messages
@@ -160,7 +198,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\nI will send you the top 5 tokens scoring 80%+ every minute.\n\nCommands:\n/portfolio - Check wallet balance\n/positions - View open positions\n/pnl - View P&L summary',
+      text: '🚀 *Meme Engine Active!*\n\nI will send the top 20 tokens scoring 67%+ every 5 minutes. Top 2 auto-bought. Sell targets set from AI analysis.\n\nCommands:\n/portfolio - Check wallet balance\n/positions - View open positions\n/pnl - View P&L summary',
       parse_mode: 'Markdown'
     });
   }
