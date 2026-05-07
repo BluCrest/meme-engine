@@ -2,6 +2,7 @@ const config = require('../config');
 const db = require('../database/db');
 const { computeFinalScore } = require('../strategist/score-engine');
 const { queueScoredToken } = require('../operator/telegram-bot');
+const { fetchWithRetry } = require('../utils/http-client');
 
 // DEX Program IDs to monitor
 const DEX_PROGRAMS = {
@@ -21,11 +22,11 @@ async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 async function scanDexScreener() {
   try {
     // Pass 1: Token profiles — discovers newly created tokens (1 API call)
-    const profileRes = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
+    const profileRes = await fetchWithRetry('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 8000, retryDelay: 2000 });
     const profiles = await profileRes.json();
 
     // Pass 2: Search results — batch MC data for many tokens (1 API call)
-    const searchRes = await fetch('https://api.dexscreener.com/latest/dex/search?q=solana');
+    const searchRes = await fetchWithRetry('https://api.dexscreener.com/latest/dex/search?q=solana', { timeout: 8000, retryDelay: 2000 });
     const searchData = await searchRes.json();
     const mcByAddress = new Map();
     const volByAddress = new Map();
@@ -80,7 +81,7 @@ async function scanDexScreener() {
           if (candidates.length > 30) continue;
           await sleep(300);
           try {
-            const pairRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${addr}`);
+            const pairRes = await fetchWithRetry(`https://api.dexscreener.com/latest/dex/tokens/${addr}`, { timeout: 8000, retryDelay: 2000 });
             const pairData = await pairRes.json();
             const pair = pairData.pairs?.[0];
             if (!pair) continue;

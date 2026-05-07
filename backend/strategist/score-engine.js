@@ -166,8 +166,17 @@ async function computeFinalScore(tokenAddress) {
       moonshotProbability: Math.round(moonshotProbability)
     });
 
+    // Fallback: if RPC rate-limited and score is near 0, use volume-only scoring
+    if (finalApeProbability < 15 && token?.volume_24h > 1000) {
+      const volScore = Math.min(60, Math.round((token.volume_24h / 500) * 5));
+      const mcScore = token.current_mc < 3000 ? 20 : 0;
+      const fallbackScore = Math.max(finalApeProbability, volScore + mcScore);
+      console.log(`[ScoreEngine] ${symbol}: RPC score ${finalApeProbability}%, volume fallback -> ${fallbackScore}%`);
+      apeProbability = fallbackScore;
+    }
+
     const result = {
-      apeProbability: finalApeProbability,
+      apeProbability: Math.round(apeProbability),
       moonshotProbability: analysis.moonshot_probability || 0,
       absoluteMoonshotProbability: analysis.absolute_moonshot_probability || 0,
       shouldAlert: finalApeProbability >= 65,
