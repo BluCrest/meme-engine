@@ -53,11 +53,22 @@ async function executeJupiterSwap(quoteResp, userPk) {
 async function executeBuy(tokenAddr, mode, amountSol) {
   mode = mode || 'manual_confirm';
   amountSol = amountSol || config.config.maxSolPerTrade;
-  const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+  const MIN_BUY = 0.001; // Minimum buy amount
+  const GAS_RESERVE = 0.01; // Keep for gas fees
+
   try {
     if (!walletKeypair) throw new Error('Wallet not initialized');
-    const bal = await getBalance();
-    if (bal < amountSol) throw new Error('Insufficient balance: ' + bal + ' SOL');
+    let bal = await getBalance();
+
+    // Scale down if balance is low
+    if (bal < amountSol + GAS_RESERVE) {
+      const scaledAmount = (bal - GAS_RESERVE) / 4; // Divide by 4 to be safe
+      amountSol = Math.max(scaledAmount, MIN_BUY);
+      console.log(`[Executor] Scaled buy to ${amountSol} SOL (balance: ${bal})`);
+    }
+
+    if (bal < amountSol + GAS_RESERVE) throw new Error('Insufficient balance for buy + gas: ' + bal + ' SOL');
+    const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
     const quote = await getJupiterQuote(SOL_MINT, tokenAddr, lamports);
     if (!quote || quote.error) throw new Error('No route: ' + (quote?.error || 'Unknown'));
     const swapRes = await executeJupiterSwap(quote, walletKeypair.publicKey);

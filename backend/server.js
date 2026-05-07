@@ -260,6 +260,12 @@ db.connect().then(async () => {
     console.error('[Server] Token listener failed:', err.message);
   });
 
+  // Start multi-DEX scanner (DexScreener + Jupiter + ALL DEXes)
+  const { startMultiDexScanner } = require('./sentinel/multi-dex-scanner');
+  startMultiDexScanner().catch(err => {
+    console.error('[Server] Multi-DEX scanner failed:', err.message);
+  });
+
   // Start exit manager
   const { startExitManager } = require('./operator/exit-manager');
   startExitManager();
