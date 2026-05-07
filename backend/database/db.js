@@ -15,12 +15,17 @@ async function connect() {
   }
 
   try {
-    // Strip database name from URI path to avoid case conflicts with dbName
+    // Extract database name from URI path (e.g. /clipscene) so it always matches
+    const dbMatch = uri.match(/\/([^/?]+)(\?|$)/);
+    const uriDbName = dbMatch ? dbMatch[1] : null;
+    const effectiveDbName = uriDbName || config.mongodb.dbName || 'meme_engine';
+
+    // Strip db name from URI to avoid case conflicts
     const cleanUri = uri.replace(/\/[^/?]+(\?|$)/, '/$1');
-    client = new MongoClient(cleanUri, { dbName: config.mongodb.dbName || 'meme_engine' });
+    client = new MongoClient(cleanUri, { dbName: effectiveDbName });
     await client.connect();
     db = client.db();
-    console.log('[DB] MongoDB connected');
+    console.log(`[DB] MongoDB connected — database: ${effectiveDbName}`);
     return db;
   } catch (e) {
     console.error('[DB] Connection failed:', e.message);
