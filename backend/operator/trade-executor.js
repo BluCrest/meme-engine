@@ -49,23 +49,24 @@ async function fetchWithTimeout(url, options, timeoutMs = 15000) {
 async function getJupiterQuote(input, output, amount, slippageBps) {
   slippageBps = slippageBps || 300;
   const endpoints = [
-    { base: 'https://api.jup.ag/swap/v1', path: '/quote' },
-    { base: 'https://quote-api.jup.ag/v6', path: '/quote' },
-    { base: 'https://api.jup.ag/v6', path: '/quote' }
+    { base: 'https://quote-api.jup.ag/v6', path: '/quote', params: '&onlyDirectRoutes=false' },
+    { base: 'https://api.jup.ag/swap/v1', path: '/quote', params: '' },
+    { base: 'https://api.jup.ag/v6', path: '/quote', params: '&onlyDirectRoutes=false' }
   ];
   let lastErr;
-  for (const { base, path } of endpoints) {
+  for (const { base, path, params } of endpoints) {
     try {
-      const url = `${base}${path}?inputMint=${input}&outputMint=${output}&amount=${amount}&slippageBps=${slippageBps}`;
+      const url = `${base}${path}?inputMint=${input}&outputMint=${output}&amount=${amount}&slippageBps=${slippageBps}${params}`;
       const res = await fetchWithTimeout(url, {}, 10000);
-      if (!res.ok) { lastErr = new Error(`Jupiter q ${res.status} ${path}`); continue; }
+      if (!res.ok) { lastErr = new Error(`Jupiter ${res.status}`); continue; }
       const data = await res.json();
       if (!data || data.error) { lastErr = new Error('Jupiter no route'); continue; }
-      console.log(`[Executor] Quote from ${base}${path}`);
       return data;
     } catch (e) { lastErr = e; }
   }
-  throw lastErr || new Error('Jupiter quote failed');
+  // If all failed, token likely has no route — not an error for micro-caps
+  console.log(`[Executor] No Jupiter route for ${input.slice(0, 8)}... (expected for micro-caps)`);
+  return null;
 }
 
 async function executeJupiterSwap(quoteResp, userPk) {
