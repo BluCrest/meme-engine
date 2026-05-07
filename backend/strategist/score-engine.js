@@ -22,25 +22,22 @@ async function computeFinalScore(tokenAddress) {
     const token = await db.getToken(tokenAddress);
     const symbol = token?.symbol || 'UNKNOWN';
 
-    const [
-      safety,
-      social,
-      smartMoney,
-      devWallet,
-      clusterAnalysis,
-      bundleInfo,
-      graduationInfo,
-      divergenceCheck
-    ] = await Promise.all([
-      runSafetyCheck(tokenAddress),
-      computeViralityVelocity(tokenAddress, symbol),
-      getSmartMoneyScore(tokenAddress),
-      getDevWallet(tokenAddress),
-      analyzeWalletClusters(tokenAddress),
-      detectBundles(tokenAddress, null),
-      getBondingCurveProgress(tokenAddress),
-      checkMomentumDivergence(tokenAddress)
-    ]);
+    // Serialize checks to avoid RPC rate limits (was Promise.all — 20+ parallel calls)
+    const safety = await runSafetyCheck(tokenAddress);
+    await sleep(250);
+    const social = await computeViralityVelocity(tokenAddress, symbol);
+    await sleep(250);
+    const smartMoney = await getSmartMoneyScore(tokenAddress);
+    await sleep(250);
+    const devWallet = await getDevWallet(tokenAddress);
+    await sleep(250);
+    const clusterAnalysis = await analyzeWalletClusters(tokenAddress);
+    await sleep(250);
+    const bundleInfo = await detectBundles(tokenAddress, null);
+    await sleep(250);
+    const graduationInfo = await getBondingCurveProgress(tokenAddress);
+    await sleep(250);
+    const divergenceCheck = await checkMomentumDivergence(tokenAddress);
 
     const devProfile = devWallet ? await buildDevProfile(devWallet) : null;
 
@@ -131,5 +128,7 @@ async function computeFinalScore(tokenAddress) {
     throw err;
   }
 }
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 module.exports = { computeFinalScore };
