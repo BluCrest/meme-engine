@@ -99,4 +99,21 @@ ${deepseekAnalysis?.reasoning || 'N/A'}
   return result;
 }
 
-module.exports = { sendTokenAlert };
+// Handle /start command and other messages
+async function handleUpdate(update) {
+  const msg = update.message;
+  if (!msg) return;
+
+  const chatId = msg.chat?.id;
+  const text = msg.text;
+
+  if (text === '/start') {
+    await sendTelegram('sendMessage', {
+      chat_id: chatId,
+      text: '🚀 *Meme Engine Active!*\n\nYou will receive alerts when new tokens score 55%+ ape probability.\n\nStay tuned! 🎯',
+      parse_mode: 'Markdown'
+    });
+  }
+}
+
+module.exports = { sendTokenAlert, handleUpdate };

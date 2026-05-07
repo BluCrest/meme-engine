@@ -31,17 +31,24 @@ app.get('/', (req, res) => {
   });
 });
 
-// Telegram callback handler (for button clicks)
+// Telegram webhook endpoint (handles all updates)
 app.post('/telegram/callback', async (req, res) => {
   try {
-    const { callback_query } = req.body;
-    if (!callback_query) return res.sendStatus(200);
+    const { message, callback_query } = req.body;
 
-    const { handleCallback } = require('./operator/telegram-bot-callbacks');
-    await handleCallback(callback_query);
+    if (callback_query) {
+      const { handleCallback } = require('./operator/telegram-bot-callbacks');
+      await handleCallback(callback_query);
+    }
+
+    if (message) {
+      const { handleUpdate } = require('./operator/telegram-bot');
+      await handleUpdate({ message });
+    }
+
     res.sendStatus(200);
   } catch (err) {
-    console.error('[Server] Callback error:', err.message);
+    console.error('[Server] Webhook error:', err.message);
     res.sendStatus(500);
   }
 });
