@@ -1,5 +1,5 @@
 const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
-const { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } = require('@solana/spl-token');
+const { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const crypto = require('crypto');
 const config = require('../config');
 
@@ -95,7 +95,6 @@ function sha256Discriminator(sig) {
 
 const BUY_EXACT_SOL_IN = sha256Discriminator('global:buy_exact_sol_in'); // 38fc74089edfcd5f
 const SELL_DISCRIMINATOR = sha256Discriminator('global:sell');           // 33e685a4017f83ad
-const BUY_DISCRIMINATOR  = sha256Discriminator('global:buy');           // 66063d1201daebea
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -118,10 +117,36 @@ function toBufferLE(num, bytes) {
   return buf;
 }
 
-async function createATAIfMissing(tx, userPubkey, tokenMint) {
+async function createATAIfMissing(userKeypair, tokenMint) {
+  const userPubkey = userKeypair.publicKey;
   const ata = getAssociatedTokenAddressSync(new PublicKey(tokenMint), userPubkey);
   const exists = await connection.getAccountInfo(ata);
-  if (!exists) tx.add(createAssociatedTokenAccountInstruction(userPubkey, ata, userPubkey, new PublicKey(tokenMint)));
+  if (exists) return ata;
+
+  // Use the new ATA program format (5 keys + program ID in data).
+  // The upgraded ATA program expects token_program_id encoded in instruction data
+  // for the GetAccountDataSize CPI to work correctly.
+  // data = [0x00 (Create), TOKEN_PROGRAM_ID (32 bytes)]
+  const data = Buffer.concat([
+    Buffer.from([0x00]),
+    TOKEN_PROGRAM_ID.toBuffer(),
+  ]);
+  const ataIx = new TransactionInstruction({
+    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: userPubkey, isSigner: true, isWritable: true },
+      { pubkey: ata, isSigner: false, isWritable: true },
+      { pubkey: userPubkey, isSigner: false, isWritable: false },
+      { pubkey: new PublicKey(tokenMint), isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+  const ataTx = new Transaction().add(ataIx);
+  ataTx.feePayer = userPubkey;
+  ataTx.recentBlockhash = (await connection.getRecentBlockhash()).blockhash;
+  const ataSig = await connection.sendTransaction(ataTx, [userKeypair], { maxRetries: 3 });
+  await connection.confirmTransaction(ataSig, 'confirmed');
   return ata;
 }
 
@@ -154,7 +179,7 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
   const feeRecipient    = opts.feeRecipient || new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
 
   const tx = new Transaction();
-  const userATA = await createATAIfMissing(tx, userPubkey, tokenMint);
+  const userATA = await createATAIfMissing(userKeypair, tokenMint);
 
   // ── Use buy_exact_sol_in (most natural: "spend X SOL, get ≥Y tokens") ──
   // data: discriminator(8) + spendable_sol_in(8) + min_tokens_out(8) + track_volume(1 = None)
@@ -209,7 +234,7 @@ async function pumpSell(userKeypair, tokenMint, tokenAmount) {
   const feeRecipient   = new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
 
   const tx = new Transaction();
-  const userATA = await createATAIfMissing(tx, userPubkey, tokenMint);
+  const userATA = await createATAIfMissing(userKeypair, tokenMint);
 
   const data = Buffer.concat([
     SELL_DISCRIMINATOR,
