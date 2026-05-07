@@ -13,50 +13,98 @@ const DEX_PROGRAMS = {
 };
 
 let lastChecked = Date.now();
-const CHECK_INTERVAL = 180000; // Check every 3 min (avoids rate limits)
+const CHECK_INTERVAL = 180000; // Check every 3 min
 
-// Fetch new tokens from DexScreener — single batch call, no N+1
+async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Two-pass: profiles for discovery, search for batch MC data, individual fetches only when needed
 async function scanDexScreener() {
   try {
+    // Pass 1: Token profiles — discovers newly created tokens (1 API call)
+    const profileRes = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
+    const profiles = await profileRes.json();
+
+    // Pass 2: Search results — batch MC data for many tokens (1 API call)
     const searchRes = await fetch('https://api.dexscreener.com/latest/dex/search?q=solana');
-    const data = await searchRes.json();
-    if (!data.pairs) return;
+    const searchData = await searchRes.json();
+    const mcByAddress = new Map();
+    if (searchData.pairs) {
+      for (const p of searchData.pairs) {
+        if (p.baseToken?.address) mcByAddress.set(p.baseToken.address, p.fdv || 0);
+      }
+    }
 
-    const processed = new Set();
-    for (const pair of data.pairs) {
-      const tokenAddress = pair.baseToken?.address;
-      if (!tokenAddress) continue;
-      if (tokenAddress.startsWith('0x') || tokenAddress.length < 32 || tokenAddress.length > 44) continue;
-      if (processed.has(tokenAddress)) continue;
-      processed.add(tokenAddress);
+    // Merge both sources, deduplicate by address
+    const candidates = [];
+    const seen = new Set();
 
-      const existing = await db.getToken(tokenAddress);
+    // Collect from search results (already have MC)
+    if (searchData.pairs) {
+      for (const pair of searchData.pairs) {
+        const addr = pair.baseToken?.address;
+        if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
+        if (seen.has(addr)) continue;
+        seen.add(addr);
+        candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc: pair.fdv || 0, dex: pair.dexId });
+      }
+    }
+
+    // Collect from profiles (may need individual MC fetch)
+    if (Array.isArray(profiles)) {
+      for (const profile of profiles) {
+        const addr = profile.tokenAddress;
+        if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
+        if (seen.has(addr)) continue;
+        seen.add(addr);
+
+        if (mcByAddress.has(addr)) {
+          // MC already known from search results
+          const mc = mcByAddress.get(addr);
+          if (mc >= 1000000 || mc < 1000) continue;
+          candidates.push({ addr, symbol: profile.symbol, name: profile.name, mc, dex: profile.dexId || 'unknown' });
+        } else {
+          // Need individual fetch — but skip if we already have enough
+          if (candidates.length > 30) continue;
+          await sleep(300); // 300ms gap to avoid rate limits
+          try {
+            const pairRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${addr}`);
+            const pairData = await pairRes.json();
+            const pair = pairData.pairs?.[0];
+            if (!pair) continue;
+            const mc = pair.fdv || 0;
+            if (mc >= 1000000 || mc < 1000) continue;
+            candidates.push({ addr, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name, mc, dex: pair.dexId || 'unknown' });
+          } catch (_) { /* skip if fetch fails */ }
+        }
+      }
+    }
+
+    // Process all candidates
+    for (const c of candidates) {
+      const existing = await db.getToken(c.addr);
       if (existing) continue;
 
-      const mc = pair.fdv || 0;
-      if (mc >= 1000000) continue;
-      if (mc < 1000) continue;
-
-      console.log(`[MultiDEX] New token: ${pair.baseToken?.symbol} (${tokenAddress}) MC: $${mc}`);
+      console.log(`[MultiDEX] New token: ${c.symbol || '?'} (${c.addr}) MC: $${c.mc}`);
 
       await db.upsertToken({
-        address: tokenAddress,
-        symbol: pair.baseToken?.symbol,
-        name: pair.baseToken?.name,
-        current_mc: mc,
+        address: c.addr,
+        symbol: c.symbol,
+        name: c.name,
+        current_mc: c.mc,
         status: 'new',
         created_at: new Date(),
-        dex: pair.dexId
+        dex: c.dex
       });
 
-      // Stagger scoring so RPC calls don't spike
       const delay = 30000 + Math.random() * 60000;
       setTimeout(async () => {
-        const result = await computeFinalScore(tokenAddress);
-        const token = await db.getToken(tokenAddress);
-        queueScoredToken(token, result);
+        const result = await computeFinalScore(c.addr);
+        const token = await db.getToken(c.addr);
+        if (token) queueScoredToken(token, result);
       }, delay);
     }
+
+    if (candidates.length) console.log(`[MultiDEX] Found ${candidates.length} new tokens this cycle`);
   } catch (err) {
     console.error('[MultiDEX] Scan error:', err.message);
   }
