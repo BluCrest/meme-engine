@@ -28,10 +28,62 @@ async function scanDexScreener() {
     const searchRes = await fetch('https://api.dexscreener.com/latest/dex/search?q=solana');
     const searchData = await searchRes.json();
     const mcByAddress = new Map();
+    const volByAddress = new Map();
     if (searchData.pairs) {
       for (const p of searchData.pairs) {
-        if (p.baseToken?.address) mcByAddress.set(p.baseToken.address, p.fdv || 0);
+        if (p.baseToken?.address) {
+          mcByAddress.set(p.baseToken.address, p.fdv || 0);
+          volByAddress.set(p.baseToken.address, p.volume?.h24 || 0);
+        }
       }
+    }
+
+    // Collect from search results (already have MC + volume)
+    if (searchData.pairs) {
+      for (const pair of searchData.pairs) {
+        const addr = pair.baseToken?.address;
+        if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
+        if (seen.has(addr)) continue;
+        seen.add(addr);
+        const mc = pair.fdv || 0;
+        if (mc > 10000 || mc < 1000) continue;
+        const vol = pair.volume?.h24 || 0;
+        if (vol < 500) continue; // skip tokens with negligible volume
+        candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc, volume: vol, dex: pair.dexId });
+      }
+    }
+
+    // Collect from profiles (may need individual MC fetch)
+    if (Array.isArray(profiles)) {
+      for (const profile of profiles) {
+        const addr = profile.tokenAddress;
+        if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
+        if (seen.has(addr)) continue;
+        seen.add(addr);
+
+        if (mcByAddress.has(addr)) {
+          const mc = mcByAddress.get(addr);
+          if (mc > 10000 || mc < 1000) continue;
+          const vol = volByAddress.get(addr) || 0;
+          if (vol < 500) continue;
+          candidates.push({ addr, symbol: profile.symbol, name: profile.name, mc, volume: vol, dex: profile.dexId || 'unknown' });
+        } else {
+          if (candidates.length > 30) continue;
+          await sleep(300);
+          try {
+            const pairRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${addr}`);
+            const pairData = await pairRes.json();
+            const pair = pairData.pairs?.[0];
+            if (!pair) continue;
+            const mc = pair.fdv || 0;
+            if (mc > 10000 || mc < 1000) continue;
+            const vol = pair.volume?.h24 || 0;
+            if (vol < 500) continue;
+            candidates.push({ addr, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name, mc, volume: vol, dex: pair.dexId || 'unknown' });
+          } catch (_) { /* skip if fetch fails */ }
+        }
+      }
+    }
     }
 
     // Merge both sources, deduplicate by address
@@ -86,13 +138,14 @@ async function scanDexScreener() {
       const existing = await db.getToken(c.addr);
       if (existing) continue;
 
-      console.log(`[MultiDEX] New token: ${c.symbol || '?'} (${c.addr}) MC: $${c.mc}`);
+      console.log(`[MultiDEX] New token: ${c.symbol || '?'} (${c.addr}) MC: $${c.mc} Vol: $${(c.volume || 0).toLocaleString()}`);
 
       await db.upsertToken({
         address: c.addr,
         symbol: c.symbol,
         name: c.name,
         current_mc: c.mc,
+        volume_24h: c.volume || 0,
         status: 'new',
         created_at: new Date(),
         dex: c.dex
@@ -100,9 +153,13 @@ async function scanDexScreener() {
 
       const delay = 30000 + Math.random() * 60000;
       setTimeout(async () => {
-        const result = await computeFinalScore(c.addr);
-        const token = await db.getToken(c.addr);
-        if (token) queueScoredToken(token, result);
+        try {
+          const result = await computeFinalScore(c.addr);
+          const token = await db.getToken(c.addr);
+          if (token) queueScoredToken(token, result);
+        } catch (e) {
+          console.error(`[MultiDEX] Score failed for ${c.symbol || c.addr}:`, e.message);
+        }
       }, delay);
     }
 
@@ -157,6 +214,7 @@ async function scanJupiter() {
         address: tokenAddress,
         symbol: tokenSymbol,
         name: tokenName,
+        volume_24h: 0,
         status: 'new',
         created_at: new Date()
       });
@@ -164,9 +222,13 @@ async function scanJupiter() {
       // Stagger scoring to avoid RPC spikes
       const delay = 30000 + Math.random() * 90000;
       setTimeout(async () => {
-        const result = await computeFinalScore(tokenAddress);
-        const tokenData = await db.getToken(tokenAddress);
-        queueScoredToken(tokenData, result);
+        try {
+          const result = await computeFinalScore(tokenAddress);
+          const tokenData = await db.getToken(tokenAddress);
+          if (tokenData) queueScoredToken(tokenData, result);
+        } catch (e) {
+          console.error(`[Jupiter] Score failed for ${tokenSymbol}:`, e.message);
+        }
       }, delay);
     }
   } catch (err) {

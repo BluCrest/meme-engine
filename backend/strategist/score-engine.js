@@ -42,12 +42,12 @@ async function computeFinalScore(tokenAddress) {
     const devProfile = devWallet ? await buildDevProfile(devWallet) : null;
 
     // Hard disqualifiers
-    if (safety.honeypot) return { status: 'disqualified', reason: 'honeypot', scores: { safety, social, smartMoney } };
+    if (safety.honeypot) return { status: 'disqualified', reason: 'honeypot', apeProbability: 0, shouldAlert: false, safety };
     if (clusterAnalysis.clusterRisk === 'high' && bundleInfo.bundleDetected) {
-      return { status: 'disqualified', reason: 'bundled_cluster', scores: { safety, social, smartMoney, clusterAnalysis, bundleInfo } };
+      return { status: 'disqualified', reason: 'bundled_cluster', apeProbability: 0, shouldAlert: false };
     }
     if (divergenceCheck.divergenceScore > 75) {
-      return { status: 'disqualified', reason: 'momentum_divergence', scores: { safety, social, smartMoney, divergenceCheck } };
+      return { status: 'disqualified', reason: 'momentum_divergence', apeProbability: 0, shouldAlert: false };
     }
 
     const devModifier = devProfile ? devProfile.reputation_score / 100 : 0.5;
@@ -55,6 +55,9 @@ async function computeFinalScore(tokenAddress) {
     const gradBonus =
       graduationInfo.graduationSignal === 'graduating_now' ? 20 :
       graduationInfo.graduationSignal === 'close_to_grad' ? 10 : 0;
+
+    const vol = token?.volume_24h || 0;
+    const volBonus = vol >= 50000 ? 15 : vol >= 10000 ? 10 : vol >= 5000 ? 5 : vol >= 500 ? 2 : -10;
 
     // Redistribute social weight when X/DeepSeek unavailable (social=0)
     const socialAvailable = social.socialScore > 0;
@@ -65,7 +68,8 @@ async function computeFinalScore(tokenAddress) {
       social.socialScore * 0.25 +
       smartMoney.smartMoneyScore * smartWeight +
       devModifier * 15 +
-      gradBonus
+      gradBonus +
+      volBonus
     );
 
     if (bundleInfo.bundleDetected) apeProbability *= 0.6;

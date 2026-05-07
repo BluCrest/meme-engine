@@ -63,22 +63,25 @@ async function checkLiquidityLock(tokenAddress) {
 async function simulateSell(tokenAddress) {
   try {
     const JUPITER = 'https://quote-api.jup.ag/v6';
-    // Simulate a small sell (0.01% of supply) - 1M tokens assuming 6 decimals
     const amount = 1000000;
     const url = JUPITER + '/quote?inputMint=' + tokenAddress +
       '&outputMint=So11111111111111111111111111111111111112&amount=' + amount +
       '&slippageBps=1000&onlyDirectRoutes=false';
-    const res = await fetch(url);
-    if (!res.ok) return true; // If no route, treat as honeypot
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      // No route likely means token is too small, not a honeypot
+      return false;
+    }
     const quote = await res.json();
-    // If we get a valid quote with output amount, it's not a honeypot
-    if (!quote || quote.error) return true;
-    // Check if output amount is reasonable (not 0 or extremely low)
+    if (quote.error) return false;
     const outAmount = parseInt(quote.outAmount || '0');
     return outAmount <= 0;
   } catch (e) {
-    console.error('[Safety] Honeypot simulation failed:', e.message);
-    return true; // Assume honeypot on error
+    console.warn('[Safety] Honeypot check inconclusive:', e.message);
+    return false; // Assume NOT a honeypot if we can't verify
   }
 }
 

@@ -115,10 +115,10 @@ async function flushTopAlerts() {
   queuedAlerts.length = 0;
   console.log(`[AlertBatcher] ${fresh.length} queued, filtering for >= ${ALERT_THRESHOLD}%...`);
 
-  const scores = fresh.map(a => `${a.token.symbol || '?'}:${a.result.apeProbability}%`).join(', ');
+  const scores = fresh.map(a => `${a.token.symbol || '?'}:${a.result.apeProbability ?? 0}%`).join(', ');
   const eligible = fresh
-    .filter(a => a.result.apeProbability >= ALERT_THRESHOLD)
-    .sort((a, b) => b.result.apeProbability - a.result.apeProbability)
+    .filter(a => (a.result.apeProbability ?? 0) >= ALERT_THRESHOLD)
+    .sort((a, b) => (b.result.apeProbability ?? 0) - (a.result.apeProbability ?? 0))
     .slice(0, MAX_ALERTS);
 
   console.log(`[AlertBatcher] Scores: [${scores}] → ${eligible.length} eligible`);
@@ -134,8 +134,8 @@ async function flushTopAlerts() {
     const devLabel = result.devProfile?.label || 'unknown';
 
     message += `*#${i + 1}* ${riskEmoji} *$${symbol}* — ${result.apeProbability}%\n`;
-    message += `   MC: ${formatMC(mc)} | Safety: ${result.safety?.safetyScore || '?'} | Dev: ${devLabel}\n`;
-    message += `   CA: \`${token.address}\`\n\n`;
+    message += `   MC: ${formatMC(mc)} | Vol: $${formatMC(token.volume_24h || 0)} | Safety: ${result.safety?.safetyScore || '?'}\n`;
+    message += `   Dev: ${devLabel} | CA: \`${token.address}\`\n\n`;
   }
 
   message += `━━━━━━━━━━━━━━━━━━━━\nUse /positions and /portfolio to manage`;
