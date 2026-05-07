@@ -35,35 +35,66 @@ async function getBalance() {
   return bal / LAMPORTS_PER_SOL;
 }
 
+async function fetchWithTimeout(url, options, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function getJupiterQuote(input, output, amount, slippageBps) {
   slippageBps = slippageBps || 300;
-  const url = JUPITER_API + '/quote?inputMint=' + input + '&outputMint=' + output + '&amount=' + amount + '&slippageBps=' + slippageBps + '&onlyDirectRoutes=false';
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('Jupiter quote failed: ' + res.statusText);
-  return res.json();
+  const endpoints = [
+    'https://quote-api.jup.ag/v6',
+    'https://api.jup.ag/v6'
+  ];
+  let lastErr;
+  for (const base of endpoints) {
+    try {
+      const url = base + '/quote?inputMint=' + input + '&outputMint=' + output + '&amount=' + amount + '&slippageBps=' + slippageBps + '&onlyDirectRoutes=false';
+      const res = await fetchWithTimeout(url, {}, 10000);
+      if (!res.ok) { lastErr = new Error('Jupiter quote ' + res.status); continue; }
+      return res.json();
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('Jupiter quote failed');
 }
 
 async function executeJupiterSwap(quoteResp, userPk) {
-  const body = JSON.stringify({
-    quoteResponse: quoteResp,
-    userPublicKey: userPk.toString(),
-    wrapAndUnwrapSol: true,
-    dynamicComputeUnitLimit: true,
-    prioritizationFeeLamports: 'auto'
-  });
-  const res = await fetch(JUPITER_API + '/swap', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body
-  });
-  if (!res.ok) throw new Error('Jupiter swap failed: ' + res.statusText);
-  return res.json();
+  const endpoints = [
+    'https://quote-api.jup.ag/v6',
+    'https://api.jup.ag/v6'
+  ];
+  let lastErr;
+  for (const base of endpoints) {
+    try {
+      const body = JSON.stringify({
+        quoteResponse: quoteResp,
+        userPublicKey: userPk.toString(),
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit: true,
+        prioritizationFeeLamports: 'auto'
+      });
+      const res = await fetchWithTimeout(base + '/swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body
+      }, 15000);
+      if (!res.ok) { lastErr = new Error('Jupiter swap ' + res.status); continue; }
+      return res.json();
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('Jupiter swap failed');
 }
 
 async function executeBuy(tokenAddr, mode, amountSol) {
   mode = mode || 'manual_confirm';
   amountSol = amountSol || config.config.maxSolPerTrade;
-  const MIN_BUY = 0.001; // Minimum buy amount
+  const MIN_BUY = 0.005; // Minimum buy amount
   const GAS_RESERVE = 0.01; // Keep for gas fees
 
   try {
@@ -72,12 +103,12 @@ async function executeBuy(tokenAddr, mode, amountSol) {
 
     // Scale down if balance is low
     if (bal < amountSol + GAS_RESERVE) {
-      const scaledAmount = (bal - GAS_RESERVE) / 4; // Divide by 4 to be safe
+      const scaledAmount = (bal - GAS_RESERVE) / 4;
       amountSol = Math.max(scaledAmount, MIN_BUY);
-      console.log(`[Executor] Scaled buy to ${amountSol} SOL (balance: ${bal})`);
+      console.log(`[Executor] Scaled buy to ${amountSol.toFixed(6)} SOL (balance: ${bal.toFixed(6)})`);
     }
 
-    if (bal < amountSol + GAS_RESERVE) throw new Error('Insufficient balance for buy + gas: ' + bal + ' SOL');
+    if (amountSol < MIN_BUY) throw new Error('Balance too low: ' + bal.toFixed(4) + ' SOL (need >= ' + (MIN_BUY + GAS_RESERVE).toFixed(3) + ')');
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
     const quote = await getJupiterQuote(SOL_MINT, tokenAddr, lamports);
     if (!quote || quote.error) throw new Error('No route: ' + (quote?.error || 'Unknown'));
