@@ -79,7 +79,6 @@ async function simulateSell(tokenAddress) {
     const outAmount = parseInt(quote.outAmount || '0');
     return outAmount <= 0;
   } catch (e) {
-    console.warn('[Safety] Honeypot check inconclusive:', e.message);
     return false; // Assume NOT a honeypot if we can't verify
   }
 }
