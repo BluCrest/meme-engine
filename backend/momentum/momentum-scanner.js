@@ -6,6 +6,20 @@ const DEXPAPRIKA_BASE = 'https://api.dexpaprika.com';
 
 const volumeHistory = new Map();
 let seenTokens = new Set();
+
+// Well-known non-memecoin addresses — skip these
+const KNOWN_NON_MEME = new Set([
+  'So11111111111111111111111111111111111111112', // Wrapped SOL
+  'EPjFWdd5AufqSSqeM2Rq4Qj4S4oGf6Yf7zG4z3z3z3z3', // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+  'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', // BONK
+  '7GCihgDB8fe6KNjn2MYtkzZcRj12u6T6GcECpK8ZBo5F', // POPCAT
+  'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm', // WIF
+  '2weMjPLLybRMMva1fM3U31goWWrCpF59CHWNhnCJ9Vyh', // dogwifhat
+  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3K6fi5Fb8umi7EQ', // mSOL
+  'J1toso1uCk3QLmjykT3ctL1A4EJukp4zq1K9PmCHqZR', // JitoSOL
+]);
+function isKnownNonMeme(addr) { return KNOWN_NON_MEME.has(addr); }
 let seenClearedAt = Date.now();
 const SEEN_CLEAR_INTERVAL = 300000;
 
@@ -88,6 +102,7 @@ async function scanMomentum() {
   for (const profile of (profiles || []).slice(0, 50)) {
     const addr = profile.tokenAddress;
     if (!addr || addr.length < 32 || addr.length > 44) continue;
+    if (isKnownNonMeme(addr)) continue;
 
     const isNew = !seenTokens.has(addr);
     seenTokens.add(addr);
@@ -125,6 +140,7 @@ async function scanMomentum() {
   for (const pair of (pairs || []).slice(0, 30)) {
     const addr = pair.baseToken?.address;
     if (!addr || addr.length < 32 || addr.length > 44) continue;
+    if (isKnownNonMeme(addr)) continue;
     if (seenTokens.has(addr)) continue;
     seenTokens.add(addr);
 

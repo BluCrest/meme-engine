@@ -5,16 +5,10 @@ const config = require('../config');
 
 const connection = new Connection(config.helius.rpcUrl, 'confirmed');
 const PUMP_PROGRAM_ID = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
-const PUMP_FEE_RECIPIENT = new PublicKey('D4Cyrh8A6To6oRLkU5s3nWEMqCnzVnJYbwMxkzWEfFgc');
+const PUMP_FEE_PROGRAM_ID = new PublicKey('pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ');
 const SYSTEM_PROGRAM_ID = SystemProgram.programId;
-const RENT_SYSVAR = new PublicKey('SysvarRent111111111111111111111111111111111');
 
-function getDiscriminator(sig) {
-  return Buffer.from(crypto.createHash('sha256').update(sig).digest().slice(0, 8));
-}
-
-const BUY_DISCRIMINATOR = getDiscriminator('global:buy');
-const SELL_DISCRIMINATOR = getDiscriminator('global:sell');
+// ── PDAs ──────────────────────────────────────────────────────
 
 function findBondingCurvePDA(tokenMint) {
   const [pda] = PublicKey.findProgramAddressSync(
@@ -25,156 +19,98 @@ function findBondingCurvePDA(tokenMint) {
 }
 
 function findBondingCurveATA(bondingCurve, tokenMint) {
-  return getAssociatedTokenAddressSync(
-    new PublicKey(tokenMint),
-    bondingCurve,
-    true  // allowOwnerOffCurve
-  );
+  return getAssociatedTokenAddressSync(new PublicKey(tokenMint), bondingCurve, true);
 }
 
-async function getOrCreateUserATA(userPubkey, tokenMint) {
-  const ata = getAssociatedTokenAddressSync(
-    new PublicKey(tokenMint),
-    userPubkey
-  );
-  const accountInfo = await connection.getAccountInfo(ata);
-  if (accountInfo) return ata; // already exists
-
-  // Need to create it — return null and caller should create it
-  return null;
+function findGlobalPDA() {
+  const [pda] = PublicKey.findProgramAddressSync([Buffer.from('global')], PUMP_PROGRAM_ID);
+  return pda;
 }
 
-function createATAInstruction(userPubkey, tokenMint) {
-  const ata = getAssociatedTokenAddressSync(
-    new PublicKey(tokenMint),
-    userPubkey
-  );
-  return createAssociatedTokenAccountInstruction(
-    userPubkey,  // payer
-    ata,         // ata
-    userPubkey,  // owner
-    new PublicKey(tokenMint)  // mint
-  );
+function findEventAuthorityPDA() {
+  const [pda] = PublicKey.findProgramAddressSync([Buffer.from('__event_authority')], PUMP_PROGRAM_ID);
+  return pda;
 }
 
-async function isOnBondingCurve(tokenMint) {
-  try {
-    const bondingCurve = findBondingCurvePDA(tokenMint);
-    const accountInfo = await connection.getAccountInfo(bondingCurve);
-    return !!accountInfo; // if account exists, it's on bonding curve
-  } catch (_) { return false; }
+function findGlobalVolumeAccumulatorPDA() {
+  const [pda] = PublicKey.findProgramAddressSync([Buffer.from('global_volume_accumulator')], PUMP_PROGRAM_ID);
+  return pda;
 }
 
-// Buy token through Pump.fun bonding curve
-async function pumpBuy(userKeypair, tokenMint, solAmount) {
-  const userPubkey = userKeypair.publicKey;
-  const mintPubkey = new PublicKey(tokenMint);
-  const lamports = Math.floor(solAmount * 1e9);
+function findUserVolumeAccumulatorPDA(user) {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from('user_volume_accumulator'), user.toBuffer()],
+    PUMP_PROGRAM_ID
+  );
+  return pda;
+}
 
-  const bondingCurve = findBondingCurvePDA(tokenMint);
-  const bondingCurveATA = findBondingCurveATA(bondingCurve, tokenMint);
-  const userATA = getAssociatedTokenAddressSync(mintPubkey, userPubkey);
+function findCreatorVaultPDA(creator) {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from('creator-vault'), creator.toBuffer()],
+    PUMP_PROGRAM_ID
+  );
+  return pda;
+}
 
-  // Check if user ATA exists, create if not
-  const tx = new Transaction();
-  const ataExists = await connection.getAccountInfo(userATA);
-  if (!ataExists) {
-    tx.add(createATAInstruction(userPubkey, tokenMint));
-  }
-
-  // Calculate token amount: for bonding curve, we use the curve formula
-  // Pump.fun uses a bonding curve where:
-  // - virtual_sol_reserves starts at 30 SOL
-  // - virtual_token_reserves starts at 1,073,000,000 tokens (1.073B)
-  // - token_amount = total_supply * (1 - (virtual_sol_reserves / (virtual_sol_reserves + sol_in)))
-  // But we'll just ask for a large amount and max_sol_cost limits the spend
-
-  // The buy instruction: amount = max tokens, max_sol_cost = max SOL to spend
-  const tokenAmount = new BN('1000000000000'); // ask for 1M tokens (will get less based on curve)
-  const maxSolCost = new BN(lamports);
-
-  const data = Buffer.concat([
-    BUY_DISCRIMINATOR,
-    toBufferLE(tokenAmount, 8),
-    toBufferLE(maxSolCost, 8)
-  ]);
-
-  tx.add(new TransactionInstruction({
-    programId: PUMP_PROGRAM_ID,
-    keys: [
-      { pubkey: PUMP_FEE_RECIPIENT, isSigner: false, isWritable: true },
-      { pubkey: mintPubkey, isSigner: false, isWritable: true },
-      { pubkey: bondingCurve, isSigner: false, isWritable: true },
-      { pubkey: bondingCurveATA, isSigner: false, isWritable: true },
-      { pubkey: userATA, isSigner: false, isWritable: true },
-      { pubkey: userPubkey, isSigner: true, isWritable: true },
-      { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: RENT_SYSVAR, isSigner: false, isWritable: false },
+function findFeeConfigPDA() {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from('fee_config'),
+      Buffer.from([1, 86, 224, 246, 147, 102, 90, 207, 68, 219, 21, 104, 191, 23, 91, 170, 81, 137, 203, 151, 245, 210, 255, 59, 101, 93, 43, 182, 253, 109, 24, 176])
     ],
-    data
-  }));
-
-  tx.feePayer = userPubkey;
-  tx.recentBlockhash = (await connection.getRecentBlockhash()).blockhash;
-
-  const sig = await connection.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
-  await connection.confirmTransaction(sig, 'confirmed');
-  return { signature: sig, tx };
+    PUMP_FEE_PROGRAM_ID
+  );
+  return pda;
 }
 
-// Sell token through Pump.fun bonding curve
-async function pumpSell(userKeypair, tokenMint, tokenAmount) {
-  const userPubkey = userKeypair.publicKey;
-  const mintPubkey = new PublicKey(tokenMint);
+// ── Bonding curve data parsing ────────────────────────────────
 
+function parseCreatorFromBondingCurve(accountInfo) {
+  // BondingCurve layout (81 bytes):
+  //   0..8    discriminator (u64)
+  //   8..16   virtualTokenReserves (u64)
+  //  16..24   virtualSolReserves (u64)
+  //  24..32   realTokenReserves (u64)
+  //  32..40   realSolReserves (u64)
+  //  40..48   tokenTotalSupply (u64)
+  //  48       complete (bool, 1 byte)
+  //  49..81   creator (Pubkey, 32 bytes)
+  const data = accountInfo.data;
+  return new PublicKey(data.slice(49, 81));
+}
+
+async function readBondingCurveCreator(tokenMint) {
   const bondingCurve = findBondingCurvePDA(tokenMint);
-  const bondingCurveATA = findBondingCurveATA(bondingCurve, tokenMint);
-  const userATA = getAssociatedTokenAddressSync(mintPubkey, userPubkey);
-  const tokenAmt = Math.floor(tokenAmount * 1e6);
-
-  const data = Buffer.concat([
-    SELL_DISCRIMINATOR,
-    toBufferLE(new BN(tokenAmt), 8),
-    toBufferLE(new BN(0), 8) // min return = 0 (accept any return)
-  ]);
-
-  const tx = new Transaction();
-  tx.add(new TransactionInstruction({
-    programId: PUMP_PROGRAM_ID,
-    keys: [
-      { pubkey: PUMP_FEE_RECIPIENT, isSigner: false, isWritable: true },
-      { pubkey: mintPubkey, isSigner: false, isWritable: true },
-      { pubkey: bondingCurve, isSigner: false, isWritable: true },
-      { pubkey: bondingCurveATA, isSigner: false, isWritable: true },
-      { pubkey: userATA, isSigner: false, isWritable: true },
-      { pubkey: userPubkey, isSigner: true, isWritable: true },
-      { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: RENT_SYSVAR, isSigner: false, isWritable: false },
-    ],
-    data
-  }));
-
-  tx.feePayer = userPubkey;
-  tx.recentBlockhash = (await connection.getRecentBlockhash()).blockhash;
-
-  const sig = await connection.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
-  await connection.confirmTransaction(sig, 'confirmed');
-  return { signature: sig, tx };
+  const accountInfo = await connection.getAccountInfo(bondingCurve);
+  if (!accountInfo) return null;
+  return parseCreatorFromBondingCurve(accountInfo);
 }
 
-// Big number helper — handles BN objects and BigInt
+// ── Discriminators ────────────────────────────────────────────
+
+function sha256Discriminator(sig) {
+  return Buffer.from(crypto.createHash('sha256').update(sig).digest().slice(0, 8));
+}
+
+const BUY_EXACT_SOL_IN = sha256Discriminator('global:buy_exact_sol_in'); // 38fc74089edfcd5f
+const SELL_DISCRIMINATOR = sha256Discriminator('global:sell');           // 33e685a4017f83ad
+const BUY_DISCRIMINATOR  = sha256Discriminator('global:buy');           // 66063d1201daebea
+
+// ── Helpers ───────────────────────────────────────────────────
+
+class BN {
+  constructor(val) { this.val = BigInt(val); }
+  toString() { return this.val.toString(); }
+  toNumber() { return Number(this.val); }
+  valueOf() { return this.val; }
+}
+
 function toBufferLE(num, bytes) {
   const buf = Buffer.alloc(bytes);
   let n;
-  if (typeof num === 'object' && num !== null && 'val' in num) {
-    n = BigInt(num.val);
-  } else {
-    n = BigInt(num);
-  }
+  if (typeof num === 'object' && num !== null && 'val' in num) n = BigInt(num.val);
+  else n = BigInt(num);
   for (let i = 0; i < bytes; i++) {
     buf[i] = Number(n & BigInt(0xff));
     n >>= BigInt(8);
@@ -182,12 +118,130 @@ function toBufferLE(num, bytes) {
   return buf;
 }
 
-// BN-like helper using BigInt
-class BN {
-  constructor(val) { this.val = BigInt(val); }
-  toString() { return this.val.toString(); }
-  toNumber() { return Number(this.val); }
-  valueOf() { return this.val; }
+async function createATAIfMissing(tx, userPubkey, tokenMint) {
+  const ata = getAssociatedTokenAddressSync(new PublicKey(tokenMint), userPubkey);
+  const exists = await connection.getAccountInfo(ata);
+  if (!exists) tx.add(createAssociatedTokenAccountInstruction(userPubkey, ata, userPubkey, new PublicKey(tokenMint)));
+  return ata;
+}
+
+// ── Public API ────────────────────────────────────────────────
+
+async function isOnBondingCurve(tokenMint) {
+  try {
+    const bondingCurve = findBondingCurvePDA(tokenMint);
+    const ai = await connection.getAccountInfo(bondingCurve);
+    return !!ai;
+  } catch (_) { return false; }
+}
+
+// opts: { feeRecipient } — lets caller override for debugging
+async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
+  const userPubkey = userKeypair.publicKey;
+  const mintPubkey = new PublicKey(tokenMint);
+  const lamports = Math.floor(solAmount * 1e9);
+
+  const bondingCurve    = findBondingCurvePDA(tokenMint);
+  const bcATA           = findBondingCurveATA(bondingCurve, tokenMint);
+  const globalPDA       = findGlobalPDA();
+  const eventAuthority  = findEventAuthorityPDA();
+  const globalVolAcc    = findGlobalVolumeAccumulatorPDA();
+  const userVolAcc      = findUserVolumeAccumulatorPDA(userPubkey);
+  const creator         = await readBondingCurveCreator(tokenMint);
+  if (!creator) throw new Error('Bonding curve not found — token may have graduated or not exist');
+  const creatorVault    = findCreatorVaultPDA(creator);
+  const feeConfigPDA    = findFeeConfigPDA();
+  const feeRecipient    = opts.feeRecipient || new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
+
+  const tx = new Transaction();
+  const userATA = await createATAIfMissing(tx, userPubkey, tokenMint);
+
+  // ── Use buy_exact_sol_in (most natural: "spend X SOL, get ≥Y tokens") ──
+  // data: discriminator(8) + spendable_sol_in(8) + min_tokens_out(8) + track_volume(1 = None)
+  const data = Buffer.concat([
+    BUY_EXACT_SOL_IN,
+    toBufferLE(new BN(lamports), 8),          // spendable_sol_in — exact SOL to spend
+    toBufferLE(new BN(1), 8),                 // min_tokens_out — at least 1 wei
+    Buffer.from([0x00]),                       // track_volume: None
+  ]);
+
+  const keys = [
+    { pubkey: globalPDA,      isSigner: false, isWritable: false },  // 1  global
+    { pubkey: feeRecipient,   isSigner: false, isWritable: true  },  // 2  fee_recipient
+    { pubkey: mintPubkey,     isSigner: false, isWritable: false },  // 3  mint
+    { pubkey: bondingCurve,   isSigner: false, isWritable: true  },  // 4  bonding_curve
+    { pubkey: bcATA,          isSigner: false, isWritable: true  },  // 5  associated_bonding_curve
+    { pubkey: userATA,        isSigner: false, isWritable: true  },  // 6  associated_user
+    { pubkey: userPubkey,     isSigner: true,  isWritable: true  },  // 7  user
+    { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false }, // 8 system_program
+    { pubkey: TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false }, // 9 token_program
+    { pubkey: creatorVault,   isSigner: false, isWritable: true  },  // 10 creator_vault
+    { pubkey: eventAuthority, isSigner: false, isWritable: false },  // 11 event_authority
+    { pubkey: PUMP_PROGRAM_ID,   isSigner: false, isWritable: false }, // 12 program
+    { pubkey: globalVolAcc,   isSigner: false, isWritable: false },  // 13 global_volume_accumulator
+    { pubkey: userVolAcc,     isSigner: false, isWritable: true  },  // 14 user_volume_accumulator
+    { pubkey: feeConfigPDA,   isSigner: false, isWritable: false },  // 15 fee_config
+    { pubkey: PUMP_FEE_PROGRAM_ID, isSigner: false, isWritable: false }, // 16 fee_program
+  ];
+
+  tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
+  tx.feePayer = userPubkey;
+  tx.recentBlockhash = (await connection.getRecentBlockhash()).blockhash;
+
+  const sig = await connection.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
+  await connection.confirmTransaction(sig, 'confirmed');
+  return { signature: sig, tx };
+}
+
+async function pumpSell(userKeypair, tokenMint, tokenAmount) {
+  const userPubkey = userKeypair.publicKey;
+  const mintPubkey = new PublicKey(tokenMint);
+  const tokenAmt   = Math.floor(tokenAmount * 1e6);
+
+  const bondingCurve   = findBondingCurvePDA(tokenMint);
+  const bcATA          = findBondingCurveATA(bondingCurve, tokenMint);
+  const globalPDA      = findGlobalPDA();
+  const eventAuthority = findEventAuthorityPDA();
+  const creator        = await readBondingCurveCreator(tokenMint);
+  if (!creator) throw new Error('Bonding curve not found for sell');
+  const creatorVault   = findCreatorVaultPDA(creator);
+  const feeConfigPDA   = findFeeConfigPDA();
+  const feeRecipient   = new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
+
+  const tx = new Transaction();
+  const userATA = await createATAIfMissing(tx, userPubkey, tokenMint);
+
+  const data = Buffer.concat([
+    SELL_DISCRIMINATOR,
+    toBufferLE(new BN(tokenAmt), 8),  // amount — exact tokens to sell
+    toBufferLE(new BN(0), 8),          // min_sol_output — accept any return
+  ]);
+
+  // Sell accounts per official IDL (14 accounts)
+  const keys = [
+    { pubkey: globalPDA,      isSigner: false, isWritable: false },  // 1  global
+    { pubkey: feeRecipient,   isSigner: false, isWritable: true  },  // 2  fee_recipient
+    { pubkey: mintPubkey,     isSigner: false, isWritable: false },  // 3  mint
+    { pubkey: bondingCurve,   isSigner: false, isWritable: true  },  // 4  bonding_curve
+    { pubkey: bcATA,          isSigner: false, isWritable: true  },  // 5  associated_bonding_curve
+    { pubkey: userATA,        isSigner: false, isWritable: true  },  // 6  associated_user
+    { pubkey: userPubkey,     isSigner: true,  isWritable: true  },  // 7  user
+    { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false }, // 8 system_program
+    { pubkey: creatorVault,   isSigner: false, isWritable: true  },  // 9  creator_vault
+    { pubkey: TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false }, // 10 token_program
+    { pubkey: eventAuthority, isSigner: false, isWritable: false },  // 11 event_authority
+    { pubkey: PUMP_PROGRAM_ID,   isSigner: false, isWritable: false }, // 12 program
+    { pubkey: feeConfigPDA,   isSigner: false, isWritable: false },  // 13 fee_config
+    { pubkey: PUMP_FEE_PROGRAM_ID, isSigner: false, isWritable: false }, // 14 fee_program
+  ];
+
+  tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
+  tx.feePayer = userPubkey;
+  tx.recentBlockhash = (await connection.getRecentBlockhash()).blockhash;
+
+  const sig = await connection.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
+  await connection.confirmTransaction(sig, 'confirmed');
+  return { signature: sig, tx };
 }
 
 module.exports = { pumpBuy, pumpSell, isOnBondingCurve, findBondingCurvePDA };
