@@ -32,9 +32,9 @@ async function scanDexScreener() {
       const existing = await db.getToken(tokenAddress);
       if (existing) continue;
 
-      // Focus on new tokens (market cap < $10M, recent creation)
+      // Focus on micro-cap tokens around $2K MC (super early entry)
       const mc = pair.fdv || 0;
-      if (mc > 10000000) continue; // Skip if MC > $10M
+      if (mc < 1000 || mc > 5000) continue; // Prefer $1K-$5K MC (around $2K ideal)
 
       console.log(`[MultiDEX] New token found: ${pair.baseToken?.symbol} (${tokenAddress})`);
 
