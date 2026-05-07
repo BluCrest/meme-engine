@@ -110,34 +110,56 @@ async function scanDexScreener() {
 // Fetch new tokens from Jupiter (new listings)
 async function scanJupiter() {
   try {
-    const res = await fetch('https://tokens.jup.ag/tokens?tags=verified');
-    const tokens = await res.json();
+    // Try multiple endpoints in case one is down
+    let tokens;
+    for (const url of [
+      'https://token.jup.ag/strict',
+      'https://tokens.jup.ag/tokens',
+      'https://quote-api.jup.ag/v6/tokens'
+    ]) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (res.ok) {
+          tokens = await res.json();
+          if (tokens) break;
+        }
+      } catch (_) { /* try next */ }
+    }
 
-    if (!Array.isArray(tokens)) return;
+    if (!tokens) return;
+    // Normalize response format: strict returns {tokens:[]}, others return array or map
+    const tokenList = Array.isArray(tokens) ? tokens : (tokens.tokens || tokens.mints || []);
+    if (!Array.isArray(tokenList) || !tokenList.length) return;
 
-    for (const token of tokens) {
-      if (!token.address) continue;
+    for (const token of tokenList) {
+      const tokenAddress = token.address || token.mint || token.id;
+      const tokenSymbol = token.symbol || token.ticker || '';
+      const tokenName = token.name || tokenSymbol;
+      if (!tokenAddress) continue;
 
-      const existing = await db.getToken(token.address);
+      const existing = await db.getToken(tokenAddress);
       if (existing) continue;
 
       // Only process meme tokens (simple names, high volume potential)
-      if (!token.symbol || token.symbol.length > 10) continue;
+      if (!tokenSymbol || tokenSymbol.length > 10) continue;
 
-      console.log(`[Jupiter] New token: ${token.symbol} (${token.address})`);
+      console.log(`[Jupiter] New token: ${tokenSymbol} (${tokenAddress})`);
 
       await db.upsertToken({
-        address: token.address,
-        symbol: token.symbol,
-        name: token.name,
+        address: tokenAddress,
+        symbol: tokenSymbol,
+        name: tokenName,
         status: 'new',
         created_at: new Date()
       });
 
       // Compute score after a small delay (let initial liquidity settle)
       setTimeout(async () => {
-        const result = await computeFinalScore(token.address);
-        const tokenData = await db.getToken(token.address);
+        const result = await computeFinalScore(tokenAddress);
+        const tokenData = await db.getToken(tokenAddress);
         queueScoredToken(tokenData, result);
       }, 30000); // Wait 30s before scoring
     }

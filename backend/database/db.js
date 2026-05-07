@@ -15,8 +15,9 @@ async function connect() {
   }
 
   try {
-    // Pass dbName as option to avoid case conflicts with URI path
-    client = new MongoClient(uri, { dbName: config.mongodb.dbName || 'meme_engine' });
+    // Strip database name from URI path to avoid case conflicts with dbName
+    const cleanUri = uri.replace(/\/[^/?]+(\?|$)/, '/$1');
+    client = new MongoClient(cleanUri, { dbName: config.mongodb.dbName || 'meme_engine' });
     await client.connect();
     db = client.db();
     console.log('[DB] MongoDB connected');
