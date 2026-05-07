@@ -8,6 +8,10 @@ const { getBondingCurveProgress } = require('./graduation-tracker');
 const { checkMomentumDivergence } = require('../detective/momentum-divergence');
 const { findMatchingPatterns } = require('./pattern-matcher');
 const { getMultiSourceVolume } = require('../utils/multi-volume');
+const { checkVitality } = require('../utils/token-vitality');
+const patternMemory = require('../agents/pattern-memory');
+const adaptiveWeights = require('../agents/adaptive-weights');
+const { computeConviction } = require('../agents/signal-confidence');
 const db = require('../database/db');
 
 async function getDevWallet(tokenAddress) {
@@ -64,28 +68,55 @@ async function computeFinalScore(tokenAddress) {
       return { status: 'disqualified', reason: 'rug_count_3+', apeProbability: 0, shouldAlert: false };
     }
 
+    // Token vitality: skip if dead (no recent buys, volume dried, all sells)
+    const tokenVitality = await checkVitality(tokenAddress, null);
+    if (tokenVitality.isDead) {
+      return { status: 'disqualified', reason: 'token_dead: ' + tokenVitality.reasons.join(', '), apeProbability: 0, shouldAlert: false, vitality: tokenVitality };
+    }
+
     const devModifier = devProfile ? devProfile.reputation_score / 100 : 0.5;
 
     const gradBonus =
-      graduationInfo.graduationSignal === 'graduating_now' ? 20 :
-      graduationInfo.graduationSignal === 'close_to_grad' ? 10 : 0;
+      graduationInfo.graduationSignal === 'graduating_now' ? 15 :
+      graduationInfo.graduationSignal === 'close_to_grad' ? 8 : 0;
 
     const vol = token?.volume_24h || 0;
-    const volBonus = vol >= 50000 ? 5 : vol >= 10000 ? 3 : vol >= 5000 ? 2 : vol >= 500 ? 1 : -5;
-    const multiSourceBonus = (token?.multi_volume?.volume_sources || 1) >= 2 ? 2 : 0;
+    const mc = token?.current_mc || 0;
+    const tokenAge = token?.age_min || 999;
 
-    // Redistribute social weight when X/DeepSeek unavailable (social=0)
+    // Micro-cap bonus: lower MC = more room to grow
+    const mcBonus = mc < 1200 ? 12 : mc < 1500 ? 9 : mc < 2000 ? 6 : mc < 2500 ? 3 : 0;
+
+    // Freshness bonus: younger tokens have more upside potential
+    const freshnessBonus = tokenAge < 2 ? 10 : tokenAge < 5 ? 7 : tokenAge < 10 ? 4 : tokenAge < 30 ? 2 : 0;
+
+    // Volume/MC ratio bonus: high relative volume means active trading
+    const volMcRatio = mc > 0 ? vol / mc : 0;
+    const volMcBonus = volMcRatio > 5 ? 8 : volMcRatio > 2 ? 5 : volMcRatio > 0.5 ? 3 : volMcRatio > 0.1 ? 1 : 0;
+
+    // Multi-source volume bonus
+    const multiSourceBonus = (token?.multi_volume?.volume_sources || 1) >= 2 ? 3 : 0;
+
+    // Smart money confidence bonus: more smart wallets = higher conviction
+    const smCount = smartMoney.smartMoneyCount || 0;
+    const smConfidenceBonus = smCount >= 5 ? 10 : smCount >= 3 ? 6 : smCount >= 1 ? 2 : 0;
+
+    // Weights (social = 0 since X API disabled, redistribute to safety + smart)
     const socialAvailable = social.socialScore > 0;
-    const safetyWeight = socialAvailable ? 0.35 : 0.50;
-    const smartWeight = socialAvailable ? 0.25 : 0.35;
+    const safetyWeight = socialAvailable ? 0.35 : 0.40;
+    const smartWeight = socialAvailable ? 0.25 : 0.40;
+
     let apeProbability = Math.min(100,
       safety.safetyScore * safetyWeight +
-      social.socialScore * 0.25 +
+      social.socialScore * 0.20 +
       smartMoney.smartMoneyScore * smartWeight +
-      devModifier * 15 +
+      devModifier * 12 +
       gradBonus +
-      volBonus +
-      multiSourceBonus
+      mcBonus +
+      freshnessBonus +
+      volMcBonus +
+      multiSourceBonus +
+      smConfidenceBonus
     );
 
     if (bundleInfo.bundleDetected) apeProbability *= 0.6;
@@ -100,12 +131,37 @@ async function computeFinalScore(tokenAddress) {
       safety, social, smartMoney, devProfile, clusterAnalysis, bundleInfo
     });
 
+    // Agent: pattern memory — historical bonus from similar past tokens
+    const historicalBonus = patternMemory.getHistoricalBonus({ mc, age_min: tokenAge });
+    if (historicalBonus !== 0) {
+      apeProbability = Math.min(100, apeProbability + historicalBonus);
+    }
+
+    // Agent: adaptive weights — learn from trade outcomes
+    const currentWeights = await adaptiveWeights.adjustWeights();
+
+    // Agent: signal confidence — conviction scoring
+    const conviction = computeConviction({
+      safety, smartMoney, vitality: tokenVitality, social,
+      apeProbability: Math.round(apeProbability),
+      tokenAge
+    });
+
+    // Record this evaluation for future learning
+    await patternMemory.recordEvaluation(
+      tokenAddress,
+      { mc, age_min: tokenAge, volume: vol, safetyScore: safety.safetyScore, smartMoneyScore: smartMoney.smartMoneyScore },
+      Math.round(apeProbability),
+      false,
+      null
+    );
+
     // Local synthesis (no DeepSeek API needed)
     const finalApeProbability = Math.round(apeProbability);
-    const tokenAge = token?.age_min || 999;
+    const vitality = tokenVitality;
     const analysis = synthesizeAnalysis({
       safety, social, smartMoney, devProfile, bundleInfo, clusterAnalysis,
-      divergenceCheck, graduationInfo, tokenAge,
+      divergenceCheck, graduationInfo, tokenAge, vitality, conviction,
       apeProbability: finalApeProbability,
       moonshotProbability: Math.round(moonshotProbability)
     });
@@ -114,8 +170,10 @@ async function computeFinalScore(tokenAddress) {
       apeProbability: finalApeProbability,
       moonshotProbability: analysis.moonshot_probability || 0,
       absoluteMoonshotProbability: analysis.absolute_moonshot_probability || 0,
-      shouldAlert: finalApeProbability >= 55,
+      shouldAlert: finalApeProbability >= 65,
       deepseekAnalysis: analysis,
+      conviction,
+      vitality,
       safety,
       social,
       smartMoney,
@@ -145,7 +203,7 @@ async function computeFinalScore(tokenAddress) {
 
 // Local synthesis engine — replaces DeepSeek when unavailable
 function synthesizeAnalysis(data) {
-  const { safety, social, smartMoney, devProfile, bundleInfo, clusterAnalysis, divergenceCheck, graduationInfo, tokenAge } = data;
+  const { safety, social, smartMoney, devProfile, bundleInfo, clusterAnalysis, divergenceCheck, graduationInfo, tokenAge, vitality, conviction } = data;
   const signals = [];
   const redFlags = [];
   const isFresh = (tokenAge || 999) < 2;
@@ -156,6 +214,16 @@ function synthesizeAnalysis(data) {
   if (safety.liquidityLocked) signals.push(`Liquidity locked ${safety.liquidityLockDuration}h`);
   if (safety.honeypot) redFlags.push('Honeypot detected');
   if (safety.top5Concentration > 50) redFlags.push(`Top5 hold ${safety.top5Concentration.toFixed(0)}%`);
+
+  // Vitality signals
+  if (vitality) {
+    if (vitality.isAlive) signals.push(`Token active: ${vitality.signals.join(', ')}`);
+    if (vitality.isDead) redFlags.push(`Token dead: ${vitality.reasons.join(', ')}`);
+    if (vitality.momentum === 'active') signals.push(`Momentum: active`);
+    if (vitality.recentTxns > 0) signals.push(`${vitality.recentTxns} txns in 1h`);
+    if (vitality.buySellRatio > 0.5) signals.push(`${(vitality.buySellRatio * 100).toFixed(0)}% buys`);
+    else if (vitality.buySellRatio < 0.35) redFlags.push(`Only ${(vitality.buySellRatio * 100).toFixed(0)}% buys`);
+  }
 
   if (smartMoney.smartMoneyCount >= 3) signals.push(`${smartMoney.smartMoneyCount} smart money wallets`);
   if (smartMoney.smartMoneyScore > 60) signals.push(`Smart money confidence ${smartMoney.smartMoneyScore}`);
@@ -175,6 +243,14 @@ function synthesizeAnalysis(data) {
 
   // Fresh token flag
   if (isFresh) signals.push(`Fresh ${tokenAge.toFixed(1)}m old`);
+
+  // Conviction
+  if (conviction) {
+    signals.push(`Conviction: ${conviction.label} (${conviction.signalCount}/5 signals)`);
+    if (conviction.contradictions.length) {
+      redFlags.push(`Contradictions: ${conviction.contradictions.join(', ')}`);
+    }
+  }
 
   // Compute target from signals + age
   let targetMultiplier = isFresh ? 1.3 : 2.0;

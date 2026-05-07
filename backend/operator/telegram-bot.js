@@ -5,7 +5,7 @@ const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-const ALERT_THRESHOLD = 50;
+const ALERT_THRESHOLD = 65;
 const MAX_ALERTS = 20;
 
 const pendingAlerts = new Map();
@@ -132,8 +132,9 @@ async function flushTopAlerts() {
     const symbol = token.symbol || 'UNKNOWN';
     const mc = token.current_mc || 0;
     const devLabel = result.devProfile?.label || 'unknown';
+    const convictionLabel = result.conviction?.label || '';
 
-    message += `*#${i + 1}* ${riskEmoji} *$${symbol}* — ${result.apeProbability}%\n`;
+    message += `*#${i + 1}* ${riskEmoji} *$${symbol}* — ${result.apeProbability}% ${convictionLabel}\n`;
     message += `   MC: ${formatMC(mc)} | Vol: $${formatMC(token.volume_24h || 0)} | Safety: ${result.safety?.safetyScore || '?'}\n`;
     message += `   Dev: ${devLabel} | CA: \`${token.address}\`\n\n`;
   }
@@ -160,6 +161,7 @@ async function autoBuyTopN(eligible, n) {
   const { executeBuy, getBalance } = require('./trade-executor');
   const db = require('../database/db');
   const { isTokenInCooldown, checkCircuitBreakers } = require('./exit-manager');
+  const { checkVitality } = require('../utils/token-vitality');
 
   // Circuit breaker: check if trading should pause
   const cb = await checkCircuitBreakers();
@@ -168,25 +170,36 @@ async function autoBuyTopN(eligible, n) {
     return;
   }
 
-  // Safety gates
-  const safe = eligible.filter(e => {
+  // Safety gates (both static + vitality re-check)
+  const safe = [];
+  for (const e of eligible) {
     const r = e.result;
     const t = e.token;
-    if (r.bundleInfo?.bundleDetected) return false;
-    if (r.clusterAnalysis?.clusterRisk === 'high') return false;
-    if (r.safety?.safetyScore < 40) return false;
-    if (r.divergenceCheck?.divergenceScore > 50) return false;
-    if (r.safety?.top5Concentration > 50) return false;
-    if (r.devProfile?.label === 'serial_rugger') return false;
-    if (r.devProfile?.rug_count >= 3) return false;
-    if (!r.safety?.liquidityLocked && (t.age_min || 999) > 5) return false;
-    return true;
-  });
+    if (r.bundleInfo?.bundleDetected) continue;
+    if (r.clusterAnalysis?.clusterRisk === 'high') continue;
+    if (r.safety?.safetyScore < 40) continue;
+    if (r.divergenceCheck?.divergenceScore > 50) continue;
+    if (r.safety?.top5Concentration > 50) continue;
+    if (r.devProfile?.label === 'serial_rugger') continue;
+    if (r.devProfile?.rug_count >= 3) continue;
+    if (!r.safety?.liquidityLocked && (t.age_min || 999) > 5) continue;
+    // Re-check token vitality at buy time (might have died since scoring)
+    const nowVitality = await checkVitality(t.address, null);
+    if (nowVitality.isDead) {
+      console.log(`[AutoBuy] ${t.symbol} is dead (${nowVitality.reasons.join(', ')}), skipping`);
+      continue;
+    }
+    safe.push(e);
+  }
 
-  if (!safe.length) return;
+  if (!safe.length) {
+    console.log(`[AutoBuy] No tokens passed safety gates`);
+    return;
+  }
 
   // Check current open positions count and total invested
   const openPositions = await db.getOpenPositions();
+  const openAddresses = new Set(openPositions.map(p => p.token_address));
   const MAX_POSITIONS = 5;
   const MAX_PORTFOLIO_PCT = 0.5;
   if (openPositions.length >= MAX_POSITIONS) {
@@ -211,13 +224,24 @@ async function autoBuyTopN(eligible, n) {
         continue;
       }
 
+      // Skip if already holding this token open
+      if (openAddresses.has(token.address)) {
+        console.log(`[AutoBuy] ${token.symbol} already held open, skipping`);
+        continue;
+      }
+
       // Fresh token sizing (<2min = quick flip, smaller, tighter)
       const isFresh = (token.age_min || 999) < 2;
       const score = result.apeProbability;
-      const sizeMultiplier = isFresh ? 0.3 : score >= 90 ? 1.5 : score >= 80 ? 1.0 : 0.5;
+      const convictionRank = result.conviction?.rank || 1;
+      const convictionMultiplier = convictionRank === 4 ? 1.5 : convictionRank === 3 ? 1.0 : 0.5;
+      const sizeMultiplier = isFresh ? 0.3 : score >= 90 ? 1.5 * convictionMultiplier : score >= 80 ? 1.0 * convictionMultiplier : 0.5 * convictionMultiplier;
       const maxPerTrade = config.config.maxSolPerTrade || 0.1;
       const amount = Math.min(maxPerTrade * sizeMultiplier, availableBudget / top.length);
-      if (amount < 0.001) continue;
+      if (amount < 0.001) {
+        console.log(`[AutoBuy] ${token.symbol} amount ${amount.toFixed(4)} < 0.001, skipping`);
+        continue;
+      }
 
       const buyResult = await executeBuy(token.address, 'auto_signal', amount);
       if (buyResult.success) {
@@ -238,7 +262,8 @@ async function autoBuyTopN(eligible, n) {
           { $set: { sell_target_multiplier: exitMultiplier, sell_target_set_at: new Date(), auto_buy_score: score, moonshot_probability: moonshotPct } }
         );
 
-        const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\n${amount.toFixed(4)} SOL | Target: ${exitMultiplier.toFixed(2)}x${isFresh ? ' ⚡FLIP' : ''} | Score: ${score}% | Vol: $${formatMC(token.volume_24h || 0)}`;
+        const convLabel = result.conviction?.label || '';
+        const notifyMsg = `🤖 *AUTO-BOUGHT* $${token.symbol || ''}\n${amount.toFixed(4)} SOL | ${convLabel} | Target: ${exitMultiplier.toFixed(2)}x${isFresh ? ' ⚡FLIP' : ''} | Score: ${score}%`;
         await sendTelegram('sendMessage', { chat_id: CHAT_ID, text: notifyMsg, parse_mode: 'Markdown' });
       }
     } catch (e) {
@@ -263,7 +288,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\nI will send the top 20 tokens every 5 minutes. Top 2 auto-bought. Sell targets set from analysis.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/pnl - P&L summary (wins, losses, stops)\n/trades - Recent trade history\n/help - All commands',
+      text: '🚀 *Meme Engine Active!*\n\nTop 20 signals every 5 min (≥65% score). Top 2 auto-bought. Sell targets from analysis.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/pnl - P&L summary\n/trades - Recent trades\n/help - All commands',
       parse_mode: 'Markdown'
     });
   }
@@ -351,15 +376,15 @@ Use /portfolio for balance, /positions for open trades`;
     await sendTelegram('sendMessage', {
       chat_id: chatId,
       text: `🚀 *Meme Engine Commands*
-
 /start - Bot info
 /portfolio - Wallet balance
 /positions - View open positions
-/pnl - P&L summary with stop-losses and circuit breaker status
+/pnl - P&L summary
 /trades - Recent trade history
 /help - This message
 
-Auto-bot sends top signals every 5 min, buys top 2. Stops trading after ${CONSECUTIVE_LOSS_LIMIT} consecutive losses or daily loss limit.`,
+Agent: Scores ≥65% alert. Top 2 auto-bought. Pattern memory + adaptive weights + conviction scoring.
+Stops after ${CONSECUTIVE_LOSS_LIMIT} consecutive losses or daily loss limit.`,
       parse_mode: 'Markdown'
     });
   }

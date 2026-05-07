@@ -165,6 +165,14 @@ async function recordStopLoss(position, pnl) {
     stopped_at: new Date(),
     cooldown_until: new Date(Date.now() + STOP_LOSS_COOLDOWN_MIN * 60 * 1000)
   });
+  // Record outcome for pattern memory learning
+  try {
+    const patternMemory = require('../agents/pattern-memory');
+    await patternMemory.recordTradeOutcome(position.token_address, pnl * 100, null);
+    const adaptiveWeights = require('../agents/adaptive-weights');
+    const tokenRec = await db.getToken(position.token_address);
+    await adaptiveWeights.recordResult(position.token_address, tokenRec?.ape_probability || 0, pnl * 100);
+  } catch (_) {}
 }
 
 async function checkCircuitBreakers() {

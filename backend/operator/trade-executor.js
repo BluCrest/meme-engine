@@ -208,20 +208,28 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       timestamp: new Date()
     };
     await db.insertTrade(trade);
+    const retMult = pos.entry_price > 0 ? price / pos.entry_price : 0;
+    const pnlPercent = (retMult - 1) * 100;
     const newRatio = pos.remaining_ratio - sellRatio;
     if (newRatio <= 0.01) {
       await db.getDb().collection('positions').updateOne(
         { token_address: tokenAddr },
         { $set: { status: 'closed', closed_at: new Date(), remaining_ratio: 0 } }
       );
+      // Record outcome for agent learning
+      try {
+        const patternMemory = require('../agents/pattern-memory');
+        await patternMemory.recordTradeOutcome(tokenAddr, pnlPercent, retMult);
+        const adaptiveWeights = require('../agents/adaptive-weights');
+        const tokenRec = await db.getToken(tokenAddr);
+        await adaptiveWeights.recordResult(tokenAddr, tokenRec?.ape_probability || 0, pnlPercent);
+      } catch (_) {}
     } else {
       await db.getDb().collection('positions').updateOne(
         { token_address: tokenAddr },
         { $set: { remaining_ratio: newRatio } }
       );
     }
-    const retMult = pos.entry_price > 0 ? price / pos.entry_price : 0;
-    const pnlPercent = (retMult - 1) * 100;
     const outcome = retMult > 1 ? 'win' : retMult < 0.5 ? 'loss' : 'neutral';
     await db.getDb().collection('intelligence_reports').insertOne({
       token_address: tokenAddr,
