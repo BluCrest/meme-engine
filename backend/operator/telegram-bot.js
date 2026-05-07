@@ -288,7 +288,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\nTop 20 signals every 5 min (≥65% score). Top 2 auto-bought. Sell targets from analysis.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/pnl - P&L summary\n/trades - Recent trades\n/help - All commands',
+      text: '🚀 *Meme Engine Active!*\n\n⚡ Momentum sniping active — scans for volume spikes every 60s, auto-buys on buy pressure. Legacy scoring still running for quality plays.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/momentum - Active momentum trades\n/pnl - P&L summary\n/trades - Recent trades\n/help - All commands',
       parse_mode: 'Markdown'
     });
   }
@@ -372,6 +372,31 @@ Use /portfolio for balance, /positions for open trades`;
     await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
   }
 
+  if (text === '/momentum') {
+    try {
+      const { activePositions } = require('../momentum/momentum-trader');
+      const { getBalance } = require('./trade-executor');
+      const bal = await getBalance();
+      if (!activePositions.size) {
+        await sendTelegram('sendMessage', { chat_id: chatId, text: `⏳ No active momentum trades. Balance: ${bal.toFixed(4)} SOL\n\nMomentum scanner watches for volume spikes every 60s. Buys on: vol spike + buy pressure + high activity.` });
+        return;
+      }
+      let msg = `⚡ *Momentum Positions* (${activePositions.size}/3)\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+      for (const [addr, pos] of activePositions) {
+        const currentPrice = await require('../utils/price-feed').getCurrentPrice(addr);
+        const pnl = pos.entryPrice > 0 && currentPrice > 0 ? ((currentPrice / pos.entryPrice) - 1) * 100 : 0;
+        const emoji = pnl > 10 ? '🚀' : pnl > 0 ? '📈' : '📉';
+        msg += `${emoji} *$${pos.symbol}* — ${pnl.toFixed(1)}%\n`;
+        msg += `   Entry: $${pos.entryPrice.toFixed(8)} | Now: $${currentPrice?.toFixed(8) || '?'}\n`;
+        msg += `   Invested: ${pos.solInvested.toFixed(4)} SOL\n\n`;
+      }
+      msg += `Balance: ${bal.toFixed(4)} SOL`;
+      await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
+    } catch (e) {
+      console.error('[Telegram] /momentum error:', e.message);
+    }
+  }
+
   if (text === '/help') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
@@ -379,12 +404,14 @@ Use /portfolio for balance, /positions for open trades`;
 /start - Bot info
 /portfolio - Wallet balance
 /positions - View open positions
+/momentum - Active momentum trades (volume spike sniping)
 /pnl - P&L summary
 /trades - Recent trade history
 /help - This message
 
-Agent: Scores ≥65% alert. Top 2 auto-bought. Pattern memory + adaptive weights + conviction scoring.
-Stops after ${CONSECUTIVE_LOSS_LIMIT} consecutive losses or daily loss limit.`,
+⚡ Momentum: scans every 60s, buys volume spikes + buy pressure, 1.5x target, trailing stop, -30% hard stop.
+📊 Legacy: scores ≥65% alert, top 2 auto-bought, pattern memory + adaptive weights.
+Stops after 3 consecutive losses or daily loss limit.`,
       parse_mode: 'Markdown'
     });
   }

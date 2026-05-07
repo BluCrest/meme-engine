@@ -296,6 +296,14 @@ db.connect().then(async () => {
     console.error('[Server] Pre-launch monitor failed:', err.message);
   });
 
+  // Start momentum scanner + trader (primary strategy: volume spikes + buy pressure)
+  const { startMomentumScanner } = require('./momentum/momentum-scanner');
+  const { startMomentumTrader, handleMomentumTrigger } = require('./momentum/momentum-trader');
+  startMomentumScanner(handleMomentumTrigger).catch(err => {
+    console.error('[Server] Momentum scanner failed:', err.message);
+  });
+  startMomentumTrader();
+
   console.log('[Server] All services started - 24/7 monitoring active');
 
   app.listen(PORT, () => {
