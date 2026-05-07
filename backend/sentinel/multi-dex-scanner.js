@@ -138,12 +138,12 @@ async function scanDexScreener() {
 // Fetch new tokens from Jupiter (new listings)
 async function scanJupiter() {
   try {
-    const res = await fetch('https://token.jup.ag/strict');
-    const data = await res.json();
+    const res = await fetch('https://tokens.jup.ag/tokens?tags=verified');
+    const tokens = await res.json();
 
-    if (!data.tokens) return;
+    if (!Array.isArray(tokens)) return;
 
-    for (const token of data.tokens) {
+    for (const token of tokens) {
       if (!token.address) continue;
 
       const existing = await db.getToken(token.address);

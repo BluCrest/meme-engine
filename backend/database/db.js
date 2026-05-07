@@ -15,9 +15,10 @@ async function connect() {
   }
 
   try {
-    client = new MongoClient(uri);
+    // Pass dbName as option to avoid case conflicts with URI path
+    client = new MongoClient(uri, { dbName: config.mongodb.dbName || 'meme_engine' });
     await client.connect();
-    db = client.db(config.mongodb.dbName || 'meme_engine');
+    db = client.db();
     console.log('[DB] MongoDB connected');
     return db;
   } catch (e) {
