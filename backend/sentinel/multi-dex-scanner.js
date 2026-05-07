@@ -19,7 +19,7 @@ const CHECK_INTERVAL = 60000; // Check every minute
 async function scanDexScreener() {
   try {
     // Get latest Solana tokens from DexScreener (top gainers = new memes)
-    const res = await fetch('https://api.dexscreener.com/latest/dex/pairs/solana?limit=50');
+    const res = await fetch('https://api.dexscreener.com/latest/dex/search?q=solana%20meme&limit=50');
     const data = await res.json();
 
     if (!data.pairs) return;
@@ -78,7 +78,7 @@ async function scanDexScreener() {
 // Fetch new tokens from Jupiter (new listings)
 async function scanJupiter() {
   try {
-    const res = await fetch('https://token.jup.ag/all');
+    const res = await fetch('https://token.jup.ag/strict');
     const data = await res.json();
 
     if (!data.tokens) return;
