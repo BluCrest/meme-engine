@@ -1,7 +1,7 @@
 const config = require('../config');
 const db = require('../database/db');
 const { computeFinalScore } = require('../strategist/score-engine');
-const { sendTokenAlert } = require('../operator/telegram-bot');
+const { queueScoredToken } = require('../operator/telegram-bot');
 
 // DEX Program IDs to monitor
 const DEX_PROGRAMS = {
@@ -55,22 +55,8 @@ async function scanDexScreener() {
 
           setTimeout(async () => {
             const result = await computeFinalScore(tokenAddress);
-            if (result.shouldAlert) {
-              const token = await db.getToken(tokenAddress);
-              await sendTokenAlert(
-                token,
-                {
-                  safetyScore: result.safety?.safetyScore || 0,
-                  socialScore: result.social?.socialScore || 0,
-                  smartMoneyScore: result.smartMoney?.smartMoneyScore || 0,
-                  apeProbability: result.apeProbability,
-                  isExponential: result.social?.isExponential || false,
-                  smartMoneyCount: result.smartMoney?.smartMoneyCount || 0
-                },
-                result.devProfile,
-                result.deepseekAnalysis
-              );
-            }
+            const token = await db.getToken(tokenAddress);
+            queueScoredToken(token, result);
           }, 30000);
         } catch (e) {
           // skip profile if pair data unavailable
@@ -112,22 +98,8 @@ async function scanDexScreener() {
 
       setTimeout(async () => {
         const result = await computeFinalScore(tokenAddress);
-        if (result.shouldAlert) {
-          const token = await db.getToken(tokenAddress);
-          await sendTokenAlert(
-            token,
-            {
-              safetyScore: result.safety?.safetyScore || 0,
-              socialScore: result.social?.socialScore || 0,
-              smartMoneyScore: result.smartMoney?.smartMoneyScore || 0,
-              apeProbability: result.apeProbability,
-              isExponential: result.social?.isExponential || false,
-              smartMoneyCount: result.smartMoney?.smartMoneyCount || 0
-            },
-            result.devProfile,
-            result.deepseekAnalysis
-          );
-        }
+        const token = await db.getToken(tokenAddress);
+        queueScoredToken(token, result);
       }, 30000);
     }
   } catch (err) {
@@ -165,10 +137,8 @@ async function scanJupiter() {
       // Compute score after a small delay (let initial liquidity settle)
       setTimeout(async () => {
         const result = await computeFinalScore(token.address);
-        if (result.shouldAlert) {
-          const tokenData = await db.getToken(token.address);
-          await sendTokenAlert(tokenData, {/* scores */}, null, result.deepseekAnalysis);
-        }
+        const tokenData = await db.getToken(token.address);
+        queueScoredToken(tokenData, result);
       }, 30000); // Wait 30s before scoring
     }
   } catch (err) {

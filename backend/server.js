@@ -290,6 +290,10 @@ db.connect().then(async () => {
   const { startExitManager } = require('./operator/exit-manager');
   startExitManager();
 
+  // Start alert batcher (queues scored tokens, sends top 5 >= 80% every 60s)
+  const { startAlertBatcher } = require('./operator/telegram-bot');
+  startAlertBatcher();
+
   // Start pre-launch monitor (uses HTTP polling - works everywhere)
   const { startPreLaunchMonitor } = require('./prelaunch/tg-group-monitor');
   startPreLaunchMonitor().catch(err => {

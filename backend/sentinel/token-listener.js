@@ -3,7 +3,7 @@ const WebSocket = require('ws');
 const config = require('../config');
 const db = require('../database/db');
 const { computeFinalScore } = require('../strategist/score-engine');
-const { sendTokenAlert } = require('../operator/telegram-bot');
+const { queueScoredToken } = require('../operator/telegram-bot');
 
 const PUMP_FUN_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
@@ -100,21 +100,9 @@ async function processNewToken(tokenAddress) {
     // Compute score and alert
     const result = await computeFinalScore(tokenAddress);
 
-    if (result.shouldAlert) {
+    if (result.apeProbability >= 0) {
       const token = await db.getToken(tokenAddress);
-      await sendTokenAlert(
-        token,
-        {
-          safetyScore: result.safety?.safetyScore || 0,
-          socialScore: result.social?.socialScore || 0,
-          smartMoneyScore: result.smartMoney?.smartMoneyScore || 0,
-          apeProbability: result.apeProbability,
-          isExponential: result.social?.isExponential || false,
-          smartMoneyCount: result.smartMoney?.smartMoneyCount || 0
-        },
-        result.devProfile,
-        result.deepseekAnalysis
-      );
+      queueScoredToken(token, result);
     }
 
   } catch (err) {

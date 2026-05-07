@@ -5,7 +5,11 @@ const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
+const ALERT_THRESHOLD = 80;
+const MAX_ALERTS = 5;
+
 const pendingAlerts = new Map();
+const queuedAlerts = [];
 
 function formatMC(mc) {
   if (!mc) return '$0';
@@ -99,6 +103,52 @@ ${deepseekAnalysis?.reasoning || 'N/A'}
   return result;
 }
 
+function queueScoredToken(token, result) {
+  queuedAlerts.push({ token, result, time: Date.now() });
+}
+
+async function flushTopAlerts() {
+  if (!queuedAlerts.length) return;
+
+  const now = Date.now();
+  const fresh = queuedAlerts.filter(a => now - a.time < 300000); // Drop older than 5 min
+  queuedAlerts.length = 0;
+
+  const eligible = fresh
+    .filter(a => a.result.apeProbability >= ALERT_THRESHOLD)
+    .sort((a, b) => b.result.apeProbability - a.result.apeProbability)
+    .slice(0, MAX_ALERTS);
+
+  if (!eligible.length) return;
+
+  let message = `🚀 *TOP ${eligible.length} SIGNALS*\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  for (let i = 0; i < eligible.length; i++) {
+    const { token, result } = eligible[i];
+    const riskEmoji = result.safety?.safetyScore > 70 ? '🟢' : result.safety?.safetyScore > 40 ? '🟡' : '🔴';
+    const symbol = token.symbol || 'UNKNOWN';
+    const mc = token.current_mc || 0;
+    const devLabel = result.devProfile?.label || 'unknown';
+
+    message += `*#${i + 1}* ${riskEmoji} *$${symbol}* — ${result.apeProbability}%\n`;
+    message += `   MC: ${formatMC(mc)} | Safety: ${result.safety?.safetyScore || '?'} | Dev: ${devLabel}\n`;
+    message += `   CA: \`${token.address}\`\n\n`;
+  }
+
+  message += `━━━━━━━━━━━━━━━━━━━━\nUse /positions and /portfolio to manage`;
+
+  await sendTelegram('sendMessage', {
+    chat_id: CHAT_ID,
+    text: message,
+    parse_mode: 'Markdown'
+  });
+}
+
+function startAlertBatcher() {
+  setInterval(flushTopAlerts, 60000);
+  console.log('[Telegram] Alert batcher started (every 60s, top 5 >= 80%)');
+}
+
 // Handle /start command and other messages
 async function handleUpdate(update) {
   const msg = update.message;
@@ -110,7 +160,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\nYou will receive alerts when new tokens score 55%+ ape probability.\n\nCommands:\n/portfolio - Check wallet balance\n/positions - View open positions\n/pnl - View P&L summary',
+      text: '🚀 *Meme Engine Active!*\n\nI will send you the top 5 tokens scoring 80%+ every minute.\n\nCommands:\n/portfolio - Check wallet balance\n/positions - View open positions\n/pnl - View P&L summary',
       parse_mode: 'Markdown'
     });
   }
@@ -170,4 +220,4 @@ async function sendTradeNotification(token, type, amount, pnl = null) {
   });
 }
 
-module.exports = { sendTokenAlert, handleUpdate, sendTradeNotification };
+module.exports = { sendTokenAlert, queueScoredToken, flushTopAlerts, startAlertBatcher, handleUpdate, sendTradeNotification };
