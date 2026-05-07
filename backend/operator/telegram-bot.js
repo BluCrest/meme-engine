@@ -397,6 +397,26 @@ Use /portfolio for balance, /positions for open trades`;
     }
   }
 
+  if (text === '/copywallets') {
+    try {
+      const copyTrader = require('../agents/copy-trader');
+      const wallets = copyTrader.getTopWallets(10);
+      if (!wallets.length) {
+        await sendTelegram('sendMessage', { chat_id: chatId, text: '📭 No tracked wallets yet. Copy trader is learning — needs more token observations before it identifies profitable deployers.' });
+        return;
+      }
+      let msg = `👥 *Top Tracked Wallets*\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+      for (const w of wallets) {
+        const emoji = w.score > 50 ? '🟢' : w.score > 0 ? '🟡' : '🔴';
+        msg += `${emoji} \`${w.wallet.slice(0, 8)}...\` Score: ${w.score} | Avg: ${(w.avgReturn * 100).toFixed(0)}% | Tokens: ${w.totalTokens}\n`;
+      }
+      msg += `\n_New wallets discovered automatically as tokens are scanned._`;
+      await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
+    } catch (e) {
+      console.error('[Telegram] /copywallets error:', e.message);
+    }
+  }
+
   if (text === '/help') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
@@ -404,12 +424,14 @@ Use /portfolio for balance, /positions for open trades`;
 /start - Bot info
 /portfolio - Wallet balance
 /positions - View open positions
-/momentum - Active momentum trades (volume spike sniping)
+/momentum - Active momentum trades
+/copywallets - Top tracked profitable wallets
 /pnl - P&L summary
 /trades - Recent trade history
 /help - This message
 
 ⚡ Momentum: scans every 60s, buys volume spikes + buy pressure, 1.5x target, trailing stop, -30% hard stop.
+👥 Copy Trader: tracks profitable wallets from GMGN ranking + deployer performance. Auto-buys when known-good wallets launch.
 📊 Legacy: scores ≥65% alert, top 2 auto-bought, pattern memory + adaptive weights.
 Stops after 3 consecutive losses or daily loss limit.`,
       parse_mode: 'Markdown'
