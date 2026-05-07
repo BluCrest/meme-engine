@@ -95,6 +95,11 @@ async function executeBuy(tokenAddr, mode, amountSol) {
       dev_wallet: await getDevWalletFromDB(tokenAddr)
     });
     console.log('[Executor] Buy executed:', sig);
+
+    // Send buy notification
+    const { sendTradeNotification } = require('./telegram-bot');
+    await sendTradeNotification({ symbol: trade.symbol, address: tokenAddr, price }, 'buy', amountSol);
+
     return { success: true, signature: sig, trade: trade };
   } catch (e) {
     console.error('[Executor] Buy failed:', e.message);
@@ -159,6 +164,7 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       );
     }
     const retMult = pos.entry_price > 0 ? price / pos.entry_price : 0;
+    const pnlPercent = (retMult - 1) * 100;
     const outcome = retMult > 1 ? 'win' : retMult < 0.5 ? 'loss' : 'neutral';
     await db.getDb().collection('intelligence_reports').insertOne({
       token_address: tokenAddr,
@@ -171,6 +177,17 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       timestamp: new Date()
     });
     console.log('[Executor] Sell executed:', sig);
+
+    // Send sell notification
+    const { sendTradeNotification } = require('./telegram-bot');
+    const tokenInfo = await db.getToken(tokenAddr);
+    await sendTradeNotification(
+      { symbol: tokenInfo?.symbol, address: tokenAddr, price },
+      'sell',
+      solVal,
+      pnlPercent
+    );
+
     return { success: true, signature: sig, trade: trade };
   } catch (e) {
     console.error('[Executor] Sell failed:', e.message);

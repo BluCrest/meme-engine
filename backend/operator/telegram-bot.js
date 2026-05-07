@@ -110,10 +110,64 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\nYou will receive alerts when new tokens score 55%+ ape probability.\n\nStay tuned! 🎯',
+      text: '🚀 *Meme Engine Active!*\n\nYou will receive alerts when new tokens score 55%+ ape probability.\n\nCommands:\n/portfolio - Check wallet balance\n/positions - View open positions\n/pnl - View P&L summary',
+      parse_mode: 'Markdown'
+    });
+  }
+
+  if (text === '/portfolio') {
+    const { getBalance } = require('./trade-executor');
+    const bal = await getBalance();
+    await sendTelegram('sendMessage', {
+      chat_id: chatId,
+      text: `💰 *Wallet Balance*\n\n${bal.toFixed(4)} SOL`,
+      parse_mode: 'Markdown'
+    });
+  }
+
+  if (text === '/positions') {
+    const db = require('../database/db');
+    const positions = await db.getDb().collection('positions').find({ status: 'open' }).toArray();
+    if (!positions.length) {
+      await sendTelegram('sendMessage', { chat_id: chatId, text: 'No open positions.' });
+      return;
+    }
+    let msg = '📊 *Open Positions*\n\n';
+    for (const p of positions) {
+      const currentPrice = await require('../utils/price-feed').getCurrentPrice(p.tokenAddress);
+      const pnl = p.entry_price > 0 ? ((currentPrice / p.entry_price) - 1) * 100 : 0;
+      msg += `$${p.tokenAddress.slice(0, 8)}... Entry: $${p.entry_price?.toFixed(6)} | Now: $${currentPrice?.toFixed(6)} | P&L: ${pnl.toFixed(1)}%\n`;
+    }
+    await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
+  }
+
+  if (text === '/pnl') {
+    const { generatePortfolioSummary } = require('./pnl-card');
+    const summary = await generatePortfolioSummary();
+    await sendTelegram('sendMessage', {
+      chat_id: chatId,
+      text: `📈 *P&L Summary*\n\nTotal Trades: ${summary.totalTrades}\nWins: ${summary.wins}\nLosses: ${summary.losses}\nTotal P&L: ${summary.totalPnL?.toFixed(4)} SOL`,
       parse_mode: 'Markdown'
     });
   }
 }
 
-module.exports = { sendTokenAlert, handleUpdate };
+async function sendTradeNotification(token, type, amount, pnl = null) {
+  const emoji = type === 'buy' ? '✅' : '💰';
+  const title = type === 'buy' ? 'Bought' : 'Sold';
+  let msg = `${emoji} *${title}: $${token.symbol || 'UNKNOWN'}*\n\n`;
+  msg += `Amount: ${amount.toFixed(4)} SOL\n`;
+  msg += `Price: $${token.price?.toFixed(6)}\n`;
+  if (pnl !== null) {
+    msg += `P&L: ${pnl > 0 ? '+' : ''}${pnl.toFixed(2)}% (${pnl > 0 ? '🚀' : '📉'})\n`;
+  }
+  msg += `\n*CA:* \`${token.address}\``;
+
+  await sendTelegram('sendMessage', {
+    chat_id: CHAT_ID,
+    text: msg,
+    parse_mode: 'Markdown'
+  });
+}
+
+module.exports = { sendTokenAlert, handleUpdate, sendTradeNotification };
