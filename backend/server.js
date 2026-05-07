@@ -69,14 +69,16 @@ app.post('/alert/:tokenAddress', async (req, res) => {
   const token = await db.getToken(req.params.tokenAddress);
   if (!token) return res.status(404).json({ error: 'Token not found' });
 
-  const { analyzeTokenRealTime } = require('./strategist/deepseek-analyzer');
-  const analysis = await analyzeTokenRealTime({
-    tokenAddress: token.address,
-    symbol: token.symbol,
-    safety: { safetyScore: 75 },
-    social: { socialScore: 60 },
-    smartMoney: { smartMoneyScore: 40 }
-  });
+  const analysis = {
+    ape_probability: 50,
+    moonshot_probability: 0,
+    risk_level: 'medium',
+    key_signals: ['Manual test alert'],
+    red_flags: [],
+    suggested_exit_targets: [2.0],
+    reasoning: 'Manual alert via /alert endpoint',
+    confidence: 50
+  };
 
   const { sendTokenAlert } = require('./operator/telegram-bot');
   await sendTokenAlert(
@@ -88,15 +90,9 @@ app.post('/alert/:tokenAddress', async (req, res) => {
   res.json({ status: 'alert sent', analysis });
 });
 
-// Weekly retro endpoint
+// Weekly retro endpoint (disabled — no DeepSeek)
 app.post('/retro', async (req, res) => {
-  const { weeklyRetro } = require('./strategist/deepseek-analyzer');
-  try {
-    const result = await weeklyRetro();
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  res.json({ status: 'disabled', reason: 'DeepSeek API unavailable' });
 });
 
 // Score engine endpoint

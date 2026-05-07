@@ -6,7 +6,7 @@ const { analyzeWalletClusters } = require('../sentinel/wallet-cluster');
 const { detectBundles } = require('../sentinel/bundle-detector');
 const { getBondingCurveProgress } = require('./graduation-tracker');
 const { checkMomentumDivergence } = require('../detective/momentum-divergence');
-const { analyzeTokenRealTime, findMatchingPatterns } = require('./deepseek-analyzer');
+const { findMatchingPatterns } = require('./pattern-matcher');
 const db = require('../database/db');
 
 async function getDevWallet(tokenAddress) {
@@ -80,33 +80,9 @@ async function computeFinalScore(tokenAddress) {
       safety, social, smartMoney, devProfile, clusterAnalysis, bundleInfo
     });
 
-    // DeepSeek real-time analysis (falls back to local synthesis when unavailable)
-    let deepseekResult;
-    try {
-      deepseekResult = await analyzeTokenRealTime({
-        tokenAddress,
-        safety,
-        social,
-        smartMoney,
-        devProfile,
-        clusterAnalysis,
-        bundleInfo,
-        graduationInfo,
-        divergenceCheck,
-        apeProbability: Math.round(apeProbability),
-        moonshotProbability: Math.round(moonshotProbability)
-      });
-    } catch (_) {
-      deepseekResult = null;
-    }
-
-    const deepseekValid = deepseekResult?.confidence > 0 || deepseekResult?.ape_probability > 0;
-    const finalApeProbability = deepseekValid
-      ? Math.round(apeProbability * 0.6 + deepseekResult.ape_probability * 0.4)
-      : Math.round(apeProbability);
-
-    // Use local synthesis when DeepSeek unavailable
-    const analysis = deepseekValid ? deepseekResult : synthesizeAnalysis({
+    // Local synthesis (no DeepSeek API needed)
+    const finalApeProbability = Math.round(apeProbability);
+    const analysis = synthesizeAnalysis({
       safety, social, smartMoney, devProfile, bundleInfo, clusterAnalysis,
       divergenceCheck, graduationInfo,
       apeProbability: finalApeProbability,

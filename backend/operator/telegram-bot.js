@@ -201,13 +201,13 @@ async function autoBuyTopN(eligible, n) {
 
       const buyResult = await executeBuy(token.address, 'auto_signal', amount);
       if (buyResult.success) {
-        // Sell target: conservative when DeepSeek is unavailable
+        // Sell target from local synthesis
         const targets = result.deepseekAnalysis?.suggested_exit_targets;
         let sellTarget;
         if (Array.isArray(targets) && targets.length) {
           sellTarget = targets.reduce((a, b) => a + b, 0) / targets.length;
         } else {
-          // Without DeepSeek: map score to a conservative target
+          // Fallback: map score to target
           sellTarget = 1 + score / 60; // 67% → 2.1x, 80% → 2.3x, 95% → 2.6x
         }
         const exitMultiplier = Math.max(sellTarget * 0.985, 1.6);
