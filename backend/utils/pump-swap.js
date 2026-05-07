@@ -1,5 +1,5 @@
 const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
-const { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } = require('@solana/spl-token');
 const crypto = require('crypto');
 const config = require('../config');
 
@@ -49,19 +49,12 @@ function createATAInstruction(userPubkey, tokenMint) {
     new PublicKey(tokenMint),
     userPubkey
   );
-  return new TransactionInstruction({
-    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-    keys: [
-      { pubkey: userPubkey, isSigner: true, isWritable: true },
-      { pubkey: ata, isSigner: false, isWritable: true },
-      { pubkey: userPubkey, isSigner: false, isWritable: false }, // fund for rent
-      { pubkey: new PublicKey(tokenMint), isSigner: false, isWritable: false },
-      { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: RENT_SYSVAR, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.from([]) // for create instruction, data is empty
-  });
+  return createAssociatedTokenAccountInstruction(
+    userPubkey,  // payer
+    ata,         // ata
+    userPubkey,  // owner
+    new PublicKey(tokenMint)  // mint
+  );
 }
 
 async function isOnBondingCurve(tokenMint) {
