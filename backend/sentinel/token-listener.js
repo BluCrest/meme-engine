@@ -7,7 +7,7 @@ const { sendTokenAlert } = require('../operator/telegram-bot');
 
 const PUMP_FUN_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
-let isProcessing = false;
+const processingTokens = new Set();
 
 async function startTokenListener() {
   const connection = new Connection(config.helius.rpcUrl, 'confirmed');
@@ -44,10 +44,13 @@ async function startTokenListener() {
           const logs = parsed.params?.result?.value?.logs || [];
           const tokenAddress = extractTokenFromLogs(logs);
 
-          if (tokenAddress && !isProcessing) {
-            isProcessing = true;
-            await processNewToken(tokenAddress);
-            isProcessing = false;
+          if (tokenAddress && !processingTokens.has(tokenAddress)) {
+            processingTokens.add(tokenAddress);
+            try {
+              await processNewToken(tokenAddress);
+            } finally {
+              processingTokens.delete(tokenAddress);
+            }
           }
         }
       } catch (err) {

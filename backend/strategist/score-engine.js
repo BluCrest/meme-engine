@@ -91,9 +91,10 @@ async function computeFinalScore(tokenAddress) {
       moonshotProbability: Math.round(moonshotProbability)
     });
 
-    const finalApeProbability = Math.round(
-      apeProbability * 0.6 + deepseekResult.ape_probability * 0.4
-    );
+    const deepseekValid = deepseekResult.confidence > 0 || deepseekResult.ape_probability > 0;
+    const finalApeProbability = deepseekValid
+      ? Math.round(apeProbability * 0.6 + deepseekResult.ape_probability * 0.4)
+      : Math.round(apeProbability);
 
     const result = {
       apeProbability: finalApeProbability,

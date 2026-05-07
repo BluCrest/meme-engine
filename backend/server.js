@@ -250,9 +250,29 @@ app.get('/cluster/:tokenAddress', async (req, res) => {
   }
 });
 
+// Register Telegram webhook so the bot can receive updates
+async function registerTelegramWebhook() {
+  const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.log('[Telegram] No TELEGRAM_WEBHOOK_URL set, webhook not registered. Callbacks (/start, buttons) will not work.');
+    return;
+  }
+  try {
+    const url = `https://api.telegram.org/bot${config.telegram.botToken}/setWebhook?url=${encodeURIComponent(webhookUrl + '/telegram/callback')}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    console.log('[Telegram] Webhook registered:', data.description || (data.ok ? 'OK' : 'FAILED'));
+  } catch (err) {
+    console.error('[Telegram] Webhook registration failed:', err.message);
+  }
+}
+
 // Start all services
 db.connect().then(async () => {
   console.log('[Server] Database connected');
+
+  // Register Telegram webhook
+  await registerTelegramWebhook();
 
   // Start token listener (uses HTTP WebSocket - works everywhere)
   const { startTokenListener } = require('./sentinel/token-listener');

@@ -18,33 +18,88 @@ const CHECK_INTERVAL = 60000; // Check every minute
 // Fetch new tokens from DexScreener (covers ALL DEXes)
 async function scanDexScreener() {
   try {
-    // Get latest Solana tokens from DexScreener (top gainers = new memes)
-    const res = await fetch('https://api.dexscreener.com/latest/dex/search?q=solana%20meme&limit=50');
-    const data = await res.json();
+    // Method 1: Token profiles - best for discovering newly created tokens
+    const profileRes = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
+    const profiles = await profileRes.json();
+
+    if (Array.isArray(profiles)) {
+      for (const profile of profiles) {
+        const tokenAddress = profile.tokenAddress;
+        if (!tokenAddress) continue;
+
+        const existing = await db.getToken(tokenAddress);
+        if (existing) continue;
+
+        // Fetch pair data to get market cap
+        try {
+          const pairRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+          const pairData = await pairRes.json();
+          const pair = pairData.pairs?.[0];
+          if (!pair) continue;
+
+          const mc = pair.fdv || 0;
+          if (mc >= 1000000) continue;
+          if (mc < 1000) continue; // skip dust
+
+          console.log(`[MultiDEX] New token from profiles: ${pair.baseToken?.symbol} (${tokenAddress}) MC: $${mc}`);
+
+          await db.upsertToken({
+            address: tokenAddress,
+            symbol: pair.baseToken?.symbol,
+            name: pair.baseToken?.name,
+            current_mc: mc,
+            status: 'new',
+            created_at: new Date(),
+            dex: pair.dexId
+          });
+
+          setTimeout(async () => {
+            const result = await computeFinalScore(tokenAddress);
+            if (result.shouldAlert) {
+              const token = await db.getToken(tokenAddress);
+              await sendTokenAlert(
+                token,
+                {
+                  safetyScore: result.safety?.safetyScore || 0,
+                  socialScore: result.social?.socialScore || 0,
+                  smartMoneyScore: result.smartMoney?.smartMoneyScore || 0,
+                  apeProbability: result.apeProbability,
+                  isExponential: result.social?.isExponential || false,
+                  smartMoneyCount: result.smartMoney?.smartMoneyCount || 0
+                },
+                result.devProfile,
+                result.deepseekAnalysis
+              );
+            }
+          }, 30000);
+        } catch (e) {
+          // skip profile if pair data unavailable
+        }
+      }
+    }
+
+    // Method 2: Broad Solana search as fallback coverage
+    const searchRes = await fetch('https://api.dexscreener.com/latest/dex/search?q=solana');
+    const data = await searchRes.json();
 
     if (!data.pairs) return;
 
+    const processed = new Set();
     for (const pair of data.pairs) {
       const tokenAddress = pair.baseToken?.address;
       if (!tokenAddress) continue;
+      if (processed.has(tokenAddress)) continue;
+      processed.add(tokenAddress);
 
-      // Skip if already tracked
       const existing = await db.getToken(tokenAddress);
       if (existing) continue;
 
-      // Focus on micro-cap tokens: under 1M MC, prefer 1K-10K MC
       const mc = pair.fdv || 0;
-      if (mc >= 1000000) continue; // Skip if MC >= $1M
-      // Preferred buy range: 1K-10K MC
-      const isPreferred = mc >= 1000 && mc <= 10000;
-      if (!isPreferred) {
-        console.log(`[MultiDEX] Skipping ${pair.baseToken?.symbol} - MC $${mc} (not in preferred 1K-10K range)`);
-        continue;
-      }
+      if (mc >= 1000000) continue;
+      if (mc < 1000) continue;
 
-      console.log(`[MultiDEX] New token found: ${pair.baseToken?.symbol} (${tokenAddress})`);
+      console.log(`[MultiDEX] New token from search: ${pair.baseToken?.symbol} (${tokenAddress}) MC: $${mc}`);
 
-      // Save token
       await db.upsertToken({
         address: tokenAddress,
         symbol: pair.baseToken?.symbol,
@@ -55,7 +110,6 @@ async function scanDexScreener() {
         dex: pair.dexId
       });
 
-      // Compute score after delay (let liquidity settle)
       setTimeout(async () => {
         const result = await computeFinalScore(tokenAddress);
         if (result.shouldAlert) {
@@ -74,7 +128,7 @@ async function scanDexScreener() {
             result.deepseekAnalysis
           );
         }
-      }, 30000); // Wait 30s before scoring
+      }, 30000);
     }
   } catch (err) {
     console.error('[MultiDEX] Scan error:', err.message);
