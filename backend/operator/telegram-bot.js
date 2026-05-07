@@ -159,6 +159,14 @@ async function flushTopAlerts() {
 async function autoBuyTopN(eligible, n) {
   const { executeBuy, getBalance } = require('./trade-executor');
   const db = require('../database/db');
+  const { isTokenInCooldown, checkCircuitBreakers } = require('./exit-manager');
+
+  // Circuit breaker: check if trading should pause
+  const cb = await checkCircuitBreakers();
+  if (cb.stopTrading) {
+    console.log(`[AutoBuy] Circuit breaker: ${cb.reason}`);
+    return;
+  }
 
   // Safety gates
   const safe = eligible.filter(e => {
@@ -197,6 +205,12 @@ async function autoBuyTopN(eligible, n) {
 
   for (const { token, result } of top) {
     try {
+      // Skip if token is in cooldown (recently stopped out)
+      if (await isTokenInCooldown(token.address)) {
+        console.log(`[AutoBuy] ${token.symbol} in cooldown, skipping`);
+        continue;
+      }
+
       // Fresh token sizing (<2min = quick flip, smaller, tighter)
       const isFresh = (token.age_min || 999) < 2;
       const score = result.apeProbability;
@@ -249,7 +263,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\nI will send the top 20 tokens every 5 minutes. Top 2 auto-bought. Sell targets set from analysis.\n\nCommands:\n/portfolio - Check wallet balance\n/positions - View open positions\n/pnl - View P&L summary',
+      text: '🚀 *Meme Engine Active!*\n\nI will send the top 20 tokens every 5 minutes. Top 2 auto-bought. Sell targets set from analysis.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/pnl - P&L summary (wins, losses, stops)\n/trades - Recent trade history\n/help - All commands',
       parse_mode: 'Markdown'
     });
   }
@@ -281,11 +295,71 @@ async function handleUpdate(update) {
   }
 
   if (text === '/pnl') {
-    const { generatePortfolioSummary } = require('./pnl-card');
-    const summary = await generatePortfolioSummary();
+    const { getBalance } = require('./trade-executor');
+    const { checkCircuitBreakers } = require('./exit-manager');
+    const openPositions = await db.getDb().collection('positions').find({ status: 'open' }).toArray();
+    const closedTrades = await db.getDb().collection('trades').find({ action: 'sell' }).sort({ timestamp: -1 }).toArray();
+    const stopLosses = await db.getDb().collection('stop_losses').find().sort({ stopped_at: -1 }).limit(10).toArray();
+    const bal = await getBalance();
+
+    let totalInvested = 0, totalReturned = 0, wins = 0, losses = 0;
+    for (const t of closedTrades) {
+      if (t.action === 'sell') {
+        totalInvested += t.sol_amount || 0;
+        totalReturned += t.sol_amount || 0;
+        if ((t.sol_amount || 0) > 0) wins++; else losses++;
+      }
+    }
+    const netPnl = totalReturned - totalInvested;
+    const winRate = closedTrades.length > 0 ? (wins / (wins + losses)) * 100 : 0;
+    const slCount = stopLosses.length;
+    const todaySl = stopLosses.filter(s => new Date(s.stopped_at) > new Date(Date.now() - 86400000)).length;
+
+    const cb = await checkCircuitBreakers();
+
+    let msg = `📈 *P&L Summary*
+━━━━━━━━━━━━━━━━━━━━
+💰 *Wallet:* ${bal.toFixed(4)} SOL
+📊 *Trades:* ${closedTrades.length} closed | ${openPositions.length} open
+🎯 *Win Rate:* ${winRate.toFixed(0)}% (${wins}W / ${losses}L)
+📉 *Stop-Losses:* ${slCount} total (${todaySl} today)
+💵 *Net P&L:* ${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(4)} SOL
+${cb.stopTrading ? '\n🔴 *TRADING PAUSED* — ' + cb.reason : ''}
+
+━━━━━━━━━━━━━━━━━━━━
+Use /portfolio for balance, /positions for open trades`;
+    await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
+  }
+
+  if (text === '/trades') {
+    const trades = await db.getDb().collection('trades').find().sort({ timestamp: -1 }).limit(10).toArray();
+    if (!trades.length) {
+      await sendTelegram('sendMessage', { chat_id: chatId, text: 'No trades yet.' });
+      return;
+    }
+    let msg = '📋 *Recent Trades*\n━━━━━━━━━━━━━━━━━━━━\n\n';
+    for (const t of trades) {
+      const emoji = t.action === 'buy' ? '✅' : '💰';
+      const time = new Date(t.timestamp).toLocaleString();
+      msg += `${emoji} *${t.action.toUpperCase()}* ${t.token_address.slice(0, 8)}...\n`;
+      msg += `   ${t.sol_amount?.toFixed(4)} SOL | ${time}\n\n`;
+    }
+    await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
+  }
+
+  if (text === '/help') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: `📈 *P&L Summary*\n\nTotal Trades: ${summary.totalTrades}\nWins: ${summary.wins}\nLosses: ${summary.losses}\nTotal P&L: ${summary.totalPnL?.toFixed(4)} SOL`,
+      text: `🚀 *Meme Engine Commands*
+
+/start - Bot info
+/portfolio - Wallet balance
+/positions - View open positions
+/pnl - P&L summary with stop-losses and circuit breaker status
+/trades - Recent trade history
+/help - This message
+
+Auto-bot sends top signals every 5 min, buys top 2. Stops trading after ${CONSECUTIVE_LOSS_LIMIT} consecutive losses or daily loss limit.`,
       parse_mode: 'Markdown'
     });
   }
