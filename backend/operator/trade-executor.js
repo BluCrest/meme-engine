@@ -99,7 +99,7 @@ async function executeJupiterSwap(quoteResp, userPk) {
 async function executeBuy(tokenAddr, mode, amountSol) {
   mode = mode || 'manual_confirm';
   amountSol = amountSol || config.config.maxSolPerTrade;
-  const MIN_BUY = 0.005; // Minimum buy amount
+  const MIN_BUY = 0.002; // Minimum buy amount (scaled for small wallets)
   const GAS_RESERVE = 0.01; // Keep for gas fees
 
   try {

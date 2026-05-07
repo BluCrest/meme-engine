@@ -1,7 +1,7 @@
 const db = require('../database/db');
 const copyTrader = require('../agents/copy-trader');
 
-const SCAN_INTERVAL = 60000;
+const SCAN_INTERVAL = 20000;
 const DEXPAPRIKA_BASE = 'https://api.dexpaprika.com';
 
 const volumeHistory = new Map();

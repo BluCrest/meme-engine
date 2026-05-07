@@ -7,7 +7,8 @@ const TAKE_PROFIT = 1.5;
 const STOP_LOSS = -0.30;
 const TRAILING_PCT = 0.12;
 const MAX_POSITIONS = 3;
-const MAX_SOL_PER_TRADE = 0.03;
+const MAX_PORTFOLIO_PCT = 0.15; // max 15% of wallet per trade
+const MIN_BUY = 0.002;
 
 let activePositions = new Map();
 
@@ -18,15 +19,23 @@ async function getTokenPrice(tokenAddress) {
   } catch (_) { return null; }
 }
 
-async function executeMomentumBuy(tokenAddress, symbol, solAmount, triggerType) {
+async function getBalance() {
   try {
-    const { executeBuy, getBalance } = require('../operator/trade-executor');
+    const { getBalance } = require('../operator/trade-executor');
+    return await getBalance();
+  } catch (_) { return 0; }
+}
+
+async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerType) {
+  try {
     const bal = await getBalance();
-    const actualAmount = Math.min(solAmount, bal * 0.3, MAX_SOL_PER_TRADE);
-    if (actualAmount < 0.005) {
-      console.log(`[MomentumTrader] ${symbol}: balance too low (${bal.toFixed(4)} SOL), skipping buy`);
+    const solAmount = bal * pctOfBalance;
+    const actualAmount = Math.min(solAmount, bal * MAX_PORTFOLIO_PCT);
+    if (actualAmount < MIN_BUY) {
+      console.log(`[MomentumTrader] ${symbol}: balance too low (${bal.toFixed(4)} SOL, need ${MIN_BUY}), skipping buy`);
       return null;
     }
+    const { executeBuy } = require('../operator/trade-executor');
     const result = await executeBuy(tokenAddress, 'momentum', actualAmount);
     if (result && result.success) {
       const entryPrice = result.price || (await getTokenPrice(tokenAddress));
@@ -126,18 +135,18 @@ async function handleMomentumTrigger(trigger) {
   if (recentSl) return;
   if (activePositions.has(trigger.address)) return;
 
-  // Size: copy_trade gets highest allocation
-  const sizeMap = {
-    copy_trade: 0.03,
-    strong: 0.025,
-    buy_pressure: 0.02,
-    high_activity: 0.015
+  // Size: percentage of wallet balance (scales automatically for small wallets)
+  const pctMap = {
+    copy_trade: 0.20,
+    strong: 0.15,
+    buy_pressure: 0.12,
+    high_activity: 0.08
   };
-  const solAmount = sizeMap[trigger.momentum.trigger] || 0.015;
+  const pctOfBalance = pctMap[trigger.momentum.trigger] || 0.08;
   const label = trigger.copyTradeSignal ? '👥 COPY TRADE' : '⚡ MOMENTUM';
 
   console.log(`[MomentumTrader] ${label}: ${trigger.symbol} — ${trigger.momentum.reason}`);
-  await executeMomentumBuy(trigger.address, trigger.symbol, solAmount, trigger.momentum.trigger);
+  await executeMomentumBuy(trigger.address, trigger.symbol, pctOfBalance, trigger.momentum.trigger);
 }
 
 async function startMomentumTrader() {
