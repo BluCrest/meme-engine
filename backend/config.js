@@ -3,7 +3,8 @@ require('dotenv').config();
 module.exports = {
   helius: {
     apiKey: process.env.HELIUS_API_KEY,
-    rpcUrl: process.env.SOLANA_RPC_URL
+    rpcUrl: process.env.SOLANA_RPC_URL,
+    privateKey: process.env.SOLANA_WALLET_PRIVATE_KEY
   },
   x: {
     bearerToken: process.env.X_BEARER_TOKEN,

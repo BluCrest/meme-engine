@@ -1,5 +1,6 @@
 const { Connection, Keypair, PublicKey, VersionedTransaction, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress, getAccount } = require('@solana/spl-token');
+const bs58 = require('bs58');
 const config = require('../config');
 const db = require('../database/db');
 const { getCurrentPrice, getCurrentMC } = require('../utils/price-feed');
@@ -9,14 +10,23 @@ const JUPITER_API = 'https://quote-api.jup.ag/v6';
 const SOL_MINT = 'So11111111111111111111111111111111111112';
 
 let walletKeypair;
-try {
-  const arr = JSON.parse(config.helius.privateKey || '[]');
-  if (arr.length > 0) {
-    walletKeypair = Keypair.fromSecretKey(new Uint8Array(arr));
-    console.log('[Executor] Wallet loaded');
+const pk = config.helius?.privateKey;
+if (pk) {
+  try {
+    const decoded = bs58.decode(pk);
+    walletKeypair = Keypair.fromSecretKey(new Uint8Array(decoded));
+    console.log('[Executor] Wallet loaded from base58 key');
+  } catch (e) {
+    try {
+      const arr = JSON.parse(pk);
+      if (arr.length > 0) {
+        walletKeypair = Keypair.fromSecretKey(new Uint8Array(arr));
+        console.log('[Executor] Wallet loaded from JSON array');
+      }
+    } catch (e2) {
+      console.error('[Executor] Wallet init failed — key must be base58 or JSON array');
+    }
   }
-} catch (e) {
-  console.error('[Executor] Wallet init failed:', e.message);
 }
 
 async function getBalance() {
