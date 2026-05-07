@@ -2,7 +2,22 @@ const TelegramBot = require('node-telegram-bot-api');
 const config = require('../config');
 const db = require('../database/db');
 
-const bot = new TelegramBot(config.telegram.botToken, { polling: true });
+// Use webhook on Render, polling locally
+const isRender = process.env.RENDER === 'true';
+const botOptions = isRender
+  ? { webHook: { port: process.env.PORT || 3000 } }
+  : { polling: true };
+
+const bot = new TelegramBot(config.telegram.botToken, botOptions);
+
+// Set webhook URL if on Render
+if (isRender && process.env.RENDER_EXTERNAL_URL) {
+  const webhookUrl = process.env.RENDER_EXTERNAL_URL + '/bot' + config.telegram.botToken;
+  bot.setWebHook(webhookUrl).catch(err => {
+    console.error('[TelegramBot] Webhook error:', err.message);
+  });
+}
+
 const CHAT_ID = config.telegram.chatId;
 const pendingAlerts = new Map();
 

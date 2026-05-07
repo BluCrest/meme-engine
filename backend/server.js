@@ -15,6 +15,12 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// Telegram webhook endpoint for Render deployment
+const bot = require('./operator/telegram-bot');
+app.post('/bot:token', (req, res) => {
+  res.sendStatus(200);
+});
+
 // Manual safety check endpoint
 app.get('/check/:tokenAddress', async (req, res) => {
   const { runSafetyCheck } = require('./sentinel/safety-checker');
