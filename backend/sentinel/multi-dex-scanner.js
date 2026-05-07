@@ -42,7 +42,7 @@ async function scanDexScreener() {
     const candidates = [];
     const seen = new Set();
 
-    // Collect from search results (already have MC + volume)
+    // Collect from search results (already have MC + volume + creation time)
     if (searchData.pairs) {
       for (const pair of searchData.pairs) {
         const addr = pair.baseToken?.address;
@@ -53,6 +53,12 @@ async function scanDexScreener() {
         if (mc > 3000 || mc < 1000) continue;
         const vol = pair.volume?.h24 || 0;
         if (vol < 500) continue;
+        // Rug check: skip if dropped >80% in 24h
+        const priceChange = pair.priceChange?.h24 || 0;
+        if (priceChange < -80) continue;
+        // Freshness check: skip if created < 2 min ago (snipe launches)
+        const ageMin = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
+        if (ageMin < 2) continue;
         candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc, volume: vol, dex: pair.dexId });
       }
     }

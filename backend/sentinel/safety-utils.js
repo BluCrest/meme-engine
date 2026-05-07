@@ -10,8 +10,7 @@ async function checkMintAuthority(tokenAddress) {
     const mintInfo = await connection.getParsedAccountInfo(mintPubkey);
     const authority = mintInfo.value?.data?.parsed?.info?.mintAuthority;
     return authority === null;
-  } catch (e) {
-    console.error('[Safety] Mint authority check failed:', e.message);
+  } catch (_) {
     return false;
   }
 }
