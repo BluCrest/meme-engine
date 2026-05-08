@@ -128,7 +128,7 @@ async function createATAIfMissing(userKeypair, tokenMint) {
     );
     return account.address;
   } catch (_) {
-    // RPC rate-limited — ATA might not exist, send instruction to create it
+    // RPC rate-limited — try manual ATA creation via idempotent instruction
     try {
       const conn = getConn();
       const ix = createAssociatedTokenAccountIdempotentInstruction(
@@ -139,8 +139,11 @@ async function createATAIfMissing(userKeypair, tokenMint) {
       tx.recentBlockhash = (await conn.getLatestBlockhash('confirmed')).blockhash;
       const sig = await conn.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
       await conn.confirmTransaction(sig, 'confirmed');
-    } catch (_) {}
-    return ata;
+      console.log(`[PumpSwap] Created ATA for ${tokenMint.slice(0, 8)}...`);
+      return ata;
+    } catch (e2) {
+      throw new Error(`ATA creation failed for ${tokenMint.slice(0, 8)}...: ${e2.message}`);
+    }
   }
 }
 

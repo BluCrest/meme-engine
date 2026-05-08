@@ -117,7 +117,7 @@ async function scanDexScreener() {
         dex: c.dex
       });
 
-      const delay = 30000 + Math.random() * 60000;
+      const delay = 15000;
       setTimeout(async () => {
         try {
           const result = await computeFinalScore(c.addr);
@@ -186,7 +186,7 @@ async function scanJupiter() {
       });
 
       // Stagger scoring to avoid RPC spikes
-      const delay = 30000 + Math.random() * 90000;
+      const delay = 15000;
       setTimeout(async () => {
         try {
           const result = await computeFinalScore(tokenAddress);

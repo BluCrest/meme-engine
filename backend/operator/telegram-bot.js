@@ -5,7 +5,7 @@ const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-const ALERT_THRESHOLD = 65;
+const ALERT_THRESHOLD = 50;
 const MAX_ALERTS = 20;
 
 const pendingAlerts = new Map();
@@ -182,7 +182,7 @@ async function autoBuyTopN(eligible, n) {
     if (r.safety?.top5Concentration > 50) continue;
     if (r.devProfile?.label === 'serial_rugger') continue;
     if (r.devProfile?.rug_count >= 3) continue;
-    if (!r.safety?.liquidityLocked && (t.age_min || 999) > 5) continue;
+    // Pump.fun bonding curve tokens never have LP locked until graduation — skip that check
     // Re-check token vitality at buy time (might have died since scoring)
     const nowVitality = await checkVitality(t.address, null);
     if (nowVitality.isDead) {
@@ -273,8 +273,8 @@ async function autoBuyTopN(eligible, n) {
 }
 
 function startAlertBatcher() {
-  setInterval(flushTopAlerts, 300000);
-  console.log('[Telegram] Alert batcher started (every 5 min, top 20 >= 50%)');
+  setInterval(flushTopAlerts, 60000);
+  console.log('[Telegram] Alert batcher started (every 1 min, top 20 >= 50%)');
 }
 
 // Handle /start command and other messages
