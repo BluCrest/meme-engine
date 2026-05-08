@@ -1,4 +1,5 @@
 const { fetchWithRetry } = require('../utils/http-client');
+const { waitForToken } = require('../utils/rate-limiter');
 const copyTrader = require('../agents/copy-trader');
 
 const SCAN_INTERVAL = 15000; // 15s for near-instant sniping
@@ -26,6 +27,7 @@ const SEEN_CLEAR_INTERVAL = 300000;
 
 async function fetchPaprikaVolume(tokenAddress) {
   try {
+    await waitForToken('dexpaprika', 5, 1000); // max 5 req/s for free tier
     const res = await fetchWithRetry(`${DEXPAPRIKA_BASE}/networks/solana/tokens/${tokenAddress}`, { timeout: 6000 });
     if (!res || !res.ok) return null;
     const data = await res.json();

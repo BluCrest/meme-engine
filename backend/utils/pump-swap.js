@@ -142,6 +142,16 @@ async function createATAIfMissing(userKeypair, tokenMint) {
   return ata;
 }
 
+async function readBuybackFeeRecipient() {
+  try {
+    const feeConfigPDA = findFeeConfigPDA();
+    const acc = await connection.getAccountInfo(feeConfigPDA);
+    if (!acc || acc.data.length < 72) return null;
+    // FeeConfig layout (Anchor): 8 discriminator + 32 authority + 32 buyback_fee_recipient
+    return new PublicKey(acc.data.slice(40, 72));
+  } catch { return null; }
+}
+
 // ── Public API ────────────────────────────────────────────────
 
 async function isOnBondingCurve(tokenMint) {
@@ -168,7 +178,7 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
   if (!creator) throw new Error('Bonding curve not found — token may have graduated or not exist');
   const creatorVault    = findCreatorVaultPDA(creator);
   const feeConfigPDA    = findFeeConfigPDA();
-  const feeRecipient    = opts.feeRecipient || new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
+  const feeRecipient    = opts.feeRecipient || (await readBuybackFeeRecipient()) || new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
 
   const tx = new Transaction();
   const userATA = await createATAIfMissing(userKeypair, tokenMint);
@@ -223,7 +233,7 @@ async function pumpSell(userKeypair, tokenMint, tokenAmount) {
   if (!creator) throw new Error('Bonding curve not found for sell');
   const creatorVault   = findCreatorVaultPDA(creator);
   const feeConfigPDA   = findFeeConfigPDA();
-  const feeRecipient   = new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
+  const feeRecipient   = (await readBuybackFeeRecipient()) || new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
 
   const tx = new Transaction();
   const userATA = await createATAIfMissing(userKeypair, tokenMint);
