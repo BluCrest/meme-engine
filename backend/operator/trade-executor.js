@@ -118,6 +118,12 @@ async function executeBuy(tokenAddr, mode, amountSol) {
     let sig, tokenAmt;
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
 
+    // Paper trading: skip real swap execution
+    if (config.paperTrading) {
+      sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      tokenAmt = lamports / 1e9 / 0.0001; // simulate token amount at ~0.0001 SOL/token
+      console.log(`[Executor] PAPER buy: ${amountSol} SOL → ${tokenAddr} (sig: ${sig})`);
+    } else {
     // Strategy 1: Try Jupiter (works for listed tokens)
     const quote = await getJupiterQuote(SOL_MINT, tokenAddr, lamports);
     if (quote && !quote.error) {
@@ -139,6 +145,7 @@ async function executeBuy(tokenAddr, mode, amountSol) {
       sig = result.signature;
       tokenAmt = amountSol / 0.0001; // rough estimate (actual amount from event)
       console.log(`[Executor] Pump.fun buy: ${sig}`);
+    }
     }
     const price = await getCurrentPrice(tokenAddr);
     const mc = await getCurrentMC(tokenAddr);
@@ -200,8 +207,15 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     const sellAmt = bal * sellRatio;
     if (sellAmt <= 0) throw new Error('Nothing to sell');
     const sellLamports = Math.floor(sellAmt * 1e6);
-    const quote = await getJupiterQuote(tokenAddr, SOL_MINT, sellLamports, 500);
     let sig, solVal;
+
+    // Paper trading: skip real swap execution
+    if (config.paperTrading) {
+      sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      solVal = sellAmt * 0.0001 * 180; // simulate SOL return
+      console.log(`[Executor] PAPER sell: ${sellAmt} tokens → ${solVal.toFixed(6)} SOL (sig: ${sig})`);
+    } else {
+    const quote = await getJupiterQuote(tokenAddr, SOL_MINT, sellLamports, 500);
     if (quote && !quote.error) {
       const swapRes = await executeJupiterSwap(quote, walletKeypair.publicKey);
       const buf = Buffer.from(swapRes.swapTransaction, 'base64');
@@ -218,6 +232,7 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       const result = await pumpSell(walletKeypair, tokenAddr, sellAmt);
       sig = result.signature;
       solVal = sellAmt * 0.9; // rough estimate after fees
+    }
     }
     const price = await getCurrentPrice(tokenAddr);
     const mc = await getCurrentMC(tokenAddr);

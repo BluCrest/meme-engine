@@ -37,5 +37,6 @@ module.exports = {
     maxSolPerTrade: parseFloat(process.env.MAX_SOL_PER_TRADE) || 0.1,
     alertCooldownMinutes: parseInt(process.env.ALERT_COOLDOWN_MINUTES) || 5,
     divergenceCheckInterval: parseInt(process.env.DIVERGENCE_CHECK_INTERVAL) || 120
-  }
+  },
+  paperTrading: process.env.PAPER_TRADING === 'true'
 };

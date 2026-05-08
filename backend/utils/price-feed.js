@@ -94,10 +94,47 @@ async function getTokenName(tokenAddress) {
   }
 }
 
+async function getTokenProfile(tokenAddress) {
+  try {
+    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    const data = await res.json();
+    const pair = data.pairs?.[0];
+    if (!pair) return null;
+
+    return {
+      price: parseFloat(pair.priceUsd) || 0,
+      marketCap: parseFloat(pair.fdv) || 0,
+      liquidity: parseFloat(pair.liquidity?.usd) || 0,
+      volume24h: parseFloat(pair.volume?.h24) || 0,
+      volume1h: parseFloat(pair.volume?.h1) || 0,
+      volume5m: parseFloat(pair.volume?.m5) || 0,
+      txns24h: { buys: pair.txns?.h24?.buys || 0, sells: pair.txns?.h24?.sells || 0 },
+      txns1h: { buys: pair.txns?.h1?.buys || 0, sells: pair.txns?.h1?.sells || 0 },
+      txns5m: { buys: pair.txns?.m5?.buys || 0, sells: pair.txns?.m5?.sells || 0 },
+      priceChange24h: parseFloat(pair.priceChange?.h24) || 0,
+      priceChange1h: parseFloat(pair.priceChange?.h1) || 0,
+      priceChange5m: parseFloat(pair.priceChange?.m5) || 0,
+      age: pair.pairCreatedAt ? Date.now() - pair.pairCreatedAt : null,
+      ageMinutes: pair.pairCreatedAt ? Math.floor((Date.now() - pair.pairCreatedAt) / 60000) : null,
+      dex: pair.dexId,
+      pairAddress: pair.pairAddress,
+      url: pair.url,
+      symbol: pair.baseToken?.symbol,
+      name: pair.baseToken?.name,
+      holders: pair.info?.holders ? pair.info.holders.total : null,
+      quoteSymbol: pair.quoteToken?.symbol
+    };
+  } catch (err) {
+    console.error('[PriceFeed] Profile error:', err.message);
+    return null;
+  }
+}
+
 module.exports = {
   getCurrentPrice,
   getCurrentMC,
   getPriceAt,
   getTokenSymbol,
-  getTokenName
+  getTokenName,
+  getTokenProfile
 };
