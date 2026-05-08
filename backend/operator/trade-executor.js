@@ -124,9 +124,20 @@ async function executeBuy(tokenAddr, mode, amountSol) {
       tokenAmt = lamports / 1e9 / 0.0001; // simulate token amount at ~0.0001 SOL/token
       console.log(`[Executor] PAPER buy: ${amountSol} SOL → ${tokenAddr} (sig: ${sig})`);
     } else {
-    // Strategy 1: Try Jupiter (works for listed tokens)
-    const quote = await getJupiterQuote(SOL_MINT, tokenAddr, lamports);
-    if (quote && !quote.error) {
+    // Check bonding curve FIRST for micro-caps — saves Jupiter API calls
+    const { pumpBuy, isOnBondingCurve } = require('../utils/pump-swap');
+    const onCurve = await isOnBondingCurve(tokenAddr);
+
+    if (onCurve) {
+      // Pump.fun path — for pre-graduation tokens
+      const result = await pumpBuy(walletKeypair, tokenAddr, amountSol);
+      sig = result.signature;
+      tokenAmt = amountSol / 0.0001; // rough estimate (actual amount from event)
+      console.log(`[Executor] Pump.fun buy: ${sig}`);
+    } else {
+      // Jupiter path — only for graduated/listed tokens
+      const quote = await getJupiterQuote(SOL_MINT, tokenAddr, lamports);
+      if (!quote || quote.error) throw new Error('No route (not on bonding curve, no Jupiter route)');
       const swapRes = await executeJupiterSwap(quote, walletKeypair.publicKey);
       const buf = Buffer.from(swapRes.swapTransaction, 'base64');
       const tx = VersionedTransaction.deserialize(buf);
@@ -136,15 +147,6 @@ async function executeBuy(tokenAddr, mode, amountSol) {
       if (conf.value.err) throw new Error('TX failed: ' + JSON.stringify(conf.value.err));
       tokenAmt = parseInt(quote.outAmount) / 1e6;
       console.log(`[Executor] Jupiter buy: ${sig}`);
-    } else {
-      // Strategy 2: Try Pump.fun bonding curve (for pre-graduation tokens)
-      const { pumpBuy, isOnBondingCurve } = require('../utils/pump-swap');
-      const onCurve = await isOnBondingCurve(tokenAddr);
-      if (!onCurve) throw new Error('No route (Jupiter + Pump.fun both unavailable)');
-      const result = await pumpBuy(walletKeypair, tokenAddr, amountSol);
-      sig = result.signature;
-      tokenAmt = amountSol / 0.0001; // rough estimate (actual amount from event)
-      console.log(`[Executor] Pump.fun buy: ${sig}`);
     }
     }
     const price = await getCurrentPrice(tokenAddr);
@@ -199,10 +201,11 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     const ata = await getAssociatedTokenAddress(new PublicKey(tokenAddr), walletKeypair.publicKey);
     let bal = 0;
     try {
-      const acc = await getAccount(connection, ata);
+      const acc = await getAccount(connection, ata, 'confirmed');
       bal = Number(acc.amount) / 1e6;
     } catch (e) {
-      throw new Error('No token balance');
+      console.log('[Executor] No token account found for', tokenAddr, '— skipping sell');
+      return { success: false, error: 'No token balance' };
     }
     const sellAmt = bal * sellRatio;
     if (sellAmt <= 0) throw new Error('Nothing to sell');

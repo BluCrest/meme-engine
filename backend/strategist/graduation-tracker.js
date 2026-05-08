@@ -119,4 +119,4 @@ async function monitorGraduation(tokenAddress, callback) {
   }
 }
 
-module.exports = { getBondingCurveProgress, monitorGraduation };
+module.exports = { getBondingCurveProgress, monitorGraduation, recordCurveSnapshot };
