@@ -176,6 +176,7 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
     Buffer.from([0x00]),                       // track_volume: None
   ]);
 
+  // Optional accounts (13-16) use SYSTEM_PROGRAM_ID as None sentinel if they don't exist on-chain
   const keys = [
     { pubkey: globalPDA,      isSigner: false, isWritable: false },  // 1  global
     { pubkey: feeRecipient,   isSigner: false, isWritable: true  },  // 2  fee_recipient
@@ -189,10 +190,10 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
     { pubkey: creatorVault,   isSigner: false, isWritable: true  },  // 10 creator_vault
     { pubkey: eventAuthority, isSigner: false, isWritable: false },  // 11 event_authority
     { pubkey: PUMP_PROGRAM_ID,   isSigner: false, isWritable: false }, // 12 program
-    { pubkey: globalVolAcc,   isSigner: false, isWritable: false },  // 13 global_volume_accumulator
-    { pubkey: userVolAcc,     isSigner: false, isWritable: true  },  // 14 user_volume_accumulator
-    { pubkey: feeConfigPDA,   isSigner: false, isWritable: false },  // 15 fee_config
-    { pubkey: PUMP_FEE_PROGRAM_ID, isSigner: false, isWritable: false }, // 16 fee_program
+    { pubkey: SYSTEM_PROGRAM_ID,  isSigner: false, isWritable: false }, // 13 global_volume_accumulator (None)
+    { pubkey: SYSTEM_PROGRAM_ID,  isSigner: false, isWritable: true  }, // 14 user_volume_accumulator (None)
+    { pubkey: SYSTEM_PROGRAM_ID,  isSigner: false, isWritable: false }, // 15 fee_config (None)
+    { pubkey: SYSTEM_PROGRAM_ID,  isSigner: false, isWritable: false }, // 16 fee_program (None)
   ];
 
   tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
@@ -229,7 +230,7 @@ async function pumpSell(userKeypair, tokenMint, tokenAmount) {
     toBufferLE(new BN(0), 8),          // min_sol_output — accept any return
   ]);
 
-  // Sell accounts per official IDL (14 accounts)
+  // Sell accounts per official IDL (14 accounts, last 2 optional)
   const keys = [
     { pubkey: globalPDA,      isSigner: false, isWritable: false },  // 1  global
     { pubkey: feeRecipient,   isSigner: false, isWritable: true  },  // 2  fee_recipient
@@ -243,8 +244,8 @@ async function pumpSell(userKeypair, tokenMint, tokenAmount) {
     { pubkey: TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false }, // 10 token_program
     { pubkey: eventAuthority, isSigner: false, isWritable: false },  // 11 event_authority
     { pubkey: PUMP_PROGRAM_ID,   isSigner: false, isWritable: false }, // 12 program
-    { pubkey: feeConfigPDA,   isSigner: false, isWritable: false },  // 13 fee_config
-    { pubkey: PUMP_FEE_PROGRAM_ID, isSigner: false, isWritable: false }, // 14 fee_program
+    { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false }, // 13 fee_config (None)
+    { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false }, // 14 fee_program (None)
   ];
 
   tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
