@@ -1,13 +1,11 @@
-const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
+const { PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
 const { getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { executeWithFallback, getConnection } = require('./rpc-rotator');
 const crypto = require('crypto');
 const config = require('../config');
 
-const connection = new Connection(config.helius.rpcUrl, {
-  commitment: 'confirmed',
-  disableRetryOnRateLimit: false,
-  confirmTransactionInitialTimeout: 60000
-});
+// RPC connection with automatic fallback on rate limits
+function getConn() { return getConnection(); }
 const PUMP_PROGRAM_ID = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
 const PUMP_FEE_PROGRAM_ID = new PublicKey('pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ');
 const SYSTEM_PROGRAM_ID = SystemProgram.programId;
@@ -86,7 +84,7 @@ function parseCreatorFromBondingCurve(accountInfo) {
 
 async function readBondingCurveCreator(tokenMint) {
   const bondingCurve = findBondingCurvePDA(tokenMint);
-  const accountInfo = await connection.getAccountInfo(bondingCurve);
+  const accountInfo = await executeWithFallback(conn => conn.getAccountInfo(bondingCurve));
   if (!accountInfo) return null;
   return parseCreatorFromBondingCurve(accountInfo);
 }
@@ -135,9 +133,8 @@ async function createATAIfMissing(userKeypair, tokenMint) {
 async function readBuybackFeeRecipient() {
   try {
     const feeConfigPDA = findFeeConfigPDA();
-    const acc = await connection.getAccountInfo(feeConfigPDA);
+    const acc = await executeWithFallback(conn => conn.getAccountInfo(feeConfigPDA));
     if (!acc || acc.data.length < 72) return null;
-    // FeeConfig layout (Anchor): 8 discriminator + 32 authority + 32 buyback_fee_recipient
     return new PublicKey(acc.data.slice(40, 72));
   } catch { return null; }
 }
@@ -147,7 +144,7 @@ async function readBuybackFeeRecipient() {
 async function isOnBondingCurve(tokenMint) {
   try {
     const bondingCurve = findBondingCurvePDA(tokenMint);
-    const ai = await connection.getAccountInfo(bondingCurve);
+    const ai = await executeWithFallback(conn => conn.getAccountInfo(bondingCurve));
     return !!ai;
   } catch (_) { return false; }
 }
@@ -203,10 +200,11 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
 
   tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
   tx.feePayer = userPubkey;
-  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  const conn = getConn();
+  tx.recentBlockhash = (await conn.getLatestBlockhash('confirmed')).blockhash;
 
-  const sig = await connection.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
-  await connection.confirmTransaction(sig, 'confirmed');
+  const sig = await conn.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
+  await conn.confirmTransaction(sig, 'confirmed');
   return { signature: sig, tx };
 }
 
@@ -254,10 +252,11 @@ async function pumpSell(userKeypair, tokenMint, tokenAmount) {
 
   tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
   tx.feePayer = userPubkey;
-  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  const conn = getConn();
+  tx.recentBlockhash = (await conn.getLatestBlockhash('confirmed')).blockhash;
 
-  const sig = await connection.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
-  await connection.confirmTransaction(sig, 'confirmed');
+  const sig = await conn.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
+  await conn.confirmTransaction(sig, 'confirmed');
   return { signature: sig, tx };
 }
 
