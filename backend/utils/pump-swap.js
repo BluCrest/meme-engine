@@ -1,9 +1,13 @@
 const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
-const { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const crypto = require('crypto');
 const config = require('../config');
 
-const connection = new Connection(config.helius.rpcUrl, 'confirmed');
+const connection = new Connection(config.helius.rpcUrl, {
+  commitment: 'confirmed',
+  disableRetryOnRateLimit: false,
+  confirmTransactionInitialTimeout: 60000
+});
 const PUMP_PROGRAM_ID = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
 const PUMP_FEE_PROGRAM_ID = new PublicKey('pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ');
 const SYSTEM_PROGRAM_ID = SystemProgram.programId;
@@ -119,29 +123,17 @@ function toBufferLE(num, bytes) {
 
 async function createATAIfMissing(userKeypair, tokenMint) {
   const userPubkey = userKeypair.publicKey;
-  const ata = getAssociatedTokenAddressSync(new PublicKey(tokenMint), userPubkey);
+  const mintPubkey = new PublicKey(tokenMint);
+  const ata = getAssociatedTokenAddressSync(mintPubkey, userPubkey);
   const exists = await connection.getAccountInfo(ata);
   if (exists) return ata;
 
-  // Use the new ATA program format (5 keys + program ID in data).
-  // The upgraded ATA program expects token_program_id encoded in instruction data
-  // for the GetAccountDataSize CPI to work correctly.
-  // data = [0x00 (Create), TOKEN_PROGRAM_ID (32 bytes)]
-  const data = Buffer.concat([
-    Buffer.from([0x00]),
-    TOKEN_PROGRAM_ID.toBuffer(),
-  ]);
-  const ataIx = new TransactionInstruction({
-    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-    keys: [
-      { pubkey: userPubkey, isSigner: true, isWritable: true },
-      { pubkey: ata, isSigner: false, isWritable: true },
-      { pubkey: userPubkey, isSigner: false, isWritable: false },
-      { pubkey: new PublicKey(tokenMint), isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data,
-  });
+  const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+    userPubkey,  // payer
+    ata,         // associatedToken
+    userPubkey,  // owner
+    mintPubkey   // mint
+  );
   const ataTx = new Transaction().add(ataIx);
   ataTx.feePayer = userPubkey;
   ataTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
