@@ -119,7 +119,7 @@ async function executeBuy(tokenAddr, mode, amountSol) {
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
 
     // Paper trading: skip real swap execution
-    if (config.paperTrading) {
+    if (await db.getPaperTrading()) {
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       tokenAmt = lamports / 1e9 / 0.0001; // simulate token amount at ~0.0001 SOL/token
       console.log(`[Executor] PAPER buy: ${amountSol} SOL → ${tokenAddr} (sig: ${sig})`);
@@ -213,7 +213,7 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     let sig, solVal;
 
     // Paper trading: skip real swap execution
-    if (config.paperTrading) {
+    if (await db.getPaperTrading()) {
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       solVal = sellAmt * 0.0001 * 180; // simulate SOL return
       console.log(`[Executor] PAPER sell: ${sellAmt} tokens → ${solVal.toFixed(6)} SOL (sig: ${sig})`);

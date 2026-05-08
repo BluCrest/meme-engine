@@ -109,6 +109,21 @@ function getMockDb() {
   return db;
 }
 
+async function getPaperTrading() {
+  const db = await connect();
+  const doc = await db.collection('settings').findOne({ key: 'paperTrading' });
+  return doc?.value ?? false;
+}
+
+async function setPaperTrading(val) {
+  const db = await connect();
+  await db.collection('settings').updateOne(
+    { key: 'paperTrading' },
+    { $set: { value: val, updatedAt: new Date() } },
+    { upsert: true }
+  );
+}
+
 module.exports = {
   connect,
   getDb: () => {
@@ -188,6 +203,9 @@ module.exports = {
     );
   },
   markExitTierHit: async (id, threshold) => {
+  },
+  getPaperTrading,
+  setPaperTrading
     const db = await connect();
     const key = `sold_${threshold}`;
     return db.collection('positions').updateOne(

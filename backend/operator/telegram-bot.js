@@ -428,6 +428,7 @@ Use /portfolio for balance, /positions for open trades`;
 /copywallets - Top tracked profitable wallets
 /pnl - P&L summary
 /trades - Recent trade history
+/papertrading [on|off] - Toggle paper trading mode (no real tx)
 /help - This message
 
 ⚡ Momentum: scans every 60s, buys volume spikes + buy pressure, 1.5x target, trailing stop, -30% hard stop.
@@ -436,6 +437,22 @@ Use /portfolio for balance, /positions for open trades`;
 Stops after 3 consecutive losses or daily loss limit.`,
       parse_mode: 'Markdown'
     });
+  }
+
+  if (text === '/papertrading' || text?.startsWith('/papertrading ')) {
+    const parts = text.split(' ');
+    const action = parts[1];
+    const { getPaperTrading, setPaperTrading } = require('../database/db');
+    if (action === 'on') {
+      await setPaperTrading(true);
+      await sendTelegram('sendMessage', { chat_id: chatId, text: '📝 Paper trading: *ON* — no real transactions will be executed', parse_mode: 'Markdown' });
+    } else if (action === 'off') {
+      await setPaperTrading(false);
+      await sendTelegram('sendMessage', { chat_id: chatId, text: '🔥 Paper trading: *OFF* — real transactions will be executed', parse_mode: 'Markdown' });
+    } else {
+      const current = await getPaperTrading();
+      await sendTelegram('sendMessage', { chat_id: chatId, text: `📝 Paper trading is currently *${current ? 'ON' : 'OFF'}*\n\nUse /papertrading on or /papertrading off to toggle.`, parse_mode: 'Markdown' });
+    }
   }
 }
 
