@@ -44,11 +44,17 @@ async function getBalance() {
 
 async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerType) {
   try {
-    const bal = await getBalance();
-    const solAmount = Math.min(bal * pctOfBalance, bal * 0.2);
-    if (solAmount < MIN_BUY) {
-      console.log(`[Momentum] ${symbol}: bal ${bal.toFixed(4)} too low for ${triggerType}, skip`);
-      return null;
+    const isPaperTrading = await db.getPaperTrading();
+    let solAmount;
+    if (isPaperTrading) {
+      solAmount = 0.01; // simulate with 0.01 SOL in paper mode
+    } else {
+      const bal = await getBalance();
+      solAmount = Math.min(bal * pctOfBalance, bal * 0.2);
+      if (solAmount < MIN_BUY) {
+        console.log(`[Momentum] ${symbol}: bal ${bal.toFixed(4)} too low for ${triggerType}, skip`);
+        return null;
+      }
     }
     const { executeBuy } = require('../operator/trade-executor');
     const result = await executeBuy(tokenAddress, 'momentum', solAmount);
@@ -63,7 +69,8 @@ async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerTyp
         solInvested: solAmount,
         entryPrice, peakPrice: entryPrice,
         boughtAt: Date.now(),
-        trigger: triggerType
+        trigger: triggerType,
+        isPaperTrading,
       };
       activePositions.set(tokenAddress, position);
       const label = triggerType === 'snipe' ? '🎯 SNIPE' : triggerType === 'copy_trade' ? '👥 COPY' : '⚡ MOMENTUM';
@@ -109,6 +116,15 @@ async function checkPosition(tokenAddress) {
   if (currentPrice > pos.peakPrice) pos.peakPrice = currentPrice;
 
   copyTrader.recordPrice(tokenAddress, currentPrice);
+
+  // Paper mode: only timeout sell (30 min), no stop-loss
+  if (pos.isPaperTrading) {
+    if (Date.now() - pos.boughtAt > 1800000) {
+      await executeMomentumSell(tokenAddress, 'paper_timeout_30m');
+      return;
+    }
+    return;
+  }
 
   // Take profit
   if (pnlPct >= TAKE_PROFIT - 1) {
@@ -160,9 +176,10 @@ async function sellSnipePositionsBeforeNewBuy() {
 }
 
 async function handleMomentumTrigger(trigger) {
-  // Balance floor: don't even try if balance is critically low
+  // Balance floor: don't even try if balance is critically low (skip check in paper trading)
   const currentBal = await getBalance();
-  if (currentBal < MIN_BALANCE_FLOOR) {
+  const isPaperTrading = await db.getPaperTrading();
+  if (!isPaperTrading && currentBal < MIN_BALANCE_FLOOR) {
     console.log(`[Momentum] Balance ${currentBal.toFixed(4)} SOL below floor ${MIN_BALANCE_FLOOR}, pausing new buys`);
     return;
   }

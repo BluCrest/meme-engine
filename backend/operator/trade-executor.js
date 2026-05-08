@@ -106,14 +106,15 @@ async function executeBuy(tokenAddr, mode, amountSol) {
   try {
     if (!walletKeypair) throw new Error('Wallet not initialized');
     let bal = await getBalance();
+    const isPaperTrading = await db.getPaperTrading();
 
-    if (bal < amountSol + GAS_RESERVE) {
+    if (!isPaperTrading && bal < amountSol + GAS_RESERVE) {
       const scaledAmount = (bal - GAS_RESERVE) / 4;
       amountSol = Math.max(scaledAmount, MIN_BUY);
       console.log(`[Executor] Scaled buy to ${amountSol.toFixed(6)} SOL (balance: ${bal.toFixed(6)})`);
     }
 
-    if (amountSol < MIN_BUY) throw new Error('Balance too low: ' + bal.toFixed(4) + ' SOL');
+    if (!isPaperTrading && amountSol < MIN_BUY) throw new Error('Balance too low: ' + bal.toFixed(4) + ' SOL');
 
     let sig, tokenAmt;
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
@@ -193,12 +194,17 @@ async function executeSell(tokenAddr, sellRatio, reason) {
   reason = reason || 'manual';
   try {
     if (!walletKeypair) throw new Error('Wallet not initialized');
+    // Validate token address before using
+    let mintPubkey;
+    try { mintPubkey = new PublicKey(tokenAddr); } catch {
+      throw new Error(`Invalid token address: "${tokenAddr}"`);
+    }
     const pos = await db.getDb().collection('positions').findOne({
       token_address: tokenAddr,
       status: 'open'
     });
     if (!pos) throw new Error('No open position');
-    const ata = await getAssociatedTokenAddress(new PublicKey(tokenAddr), walletKeypair.publicKey);
+    const ata = await getAssociatedTokenAddress(mintPubkey, walletKeypair.publicKey);
     let bal = 0;
     try {
       const acc = await getAccount(connection, ata, 'confirmed');
