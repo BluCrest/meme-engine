@@ -34,11 +34,8 @@ async function pollUpdates() {
 
 function startPolling() {
   if (pollingInterval) return;
-  // Delete any lingering webhook so getUpdates returns all updates
-  fetch(`${API_BASE}/deleteWebhook`).catch(() => {});
   pollingInterval = setInterval(pollUpdates, 3000);
-  // Also fire immediately
-  setTimeout(pollUpdates, 500);
+  setTimeout(pollUpdates, 2000); // wait 2s for webhook to be deleted
   console.log('[Telegram] Polling getUpdates every 3s for commands');
 }
 
