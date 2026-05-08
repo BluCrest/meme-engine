@@ -1,5 +1,5 @@
 const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
-const { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const crypto = require('crypto');
 const config = require('../config');
 
@@ -122,24 +122,14 @@ function toBufferLE(num, bytes) {
 }
 
 async function createATAIfMissing(userKeypair, tokenMint) {
-  const userPubkey = userKeypair.publicKey;
   const mintPubkey = new PublicKey(tokenMint);
-  const ata = getAssociatedTokenAddressSync(mintPubkey, userPubkey);
-  const exists = await connection.getAccountInfo(ata);
-  if (exists) return ata;
-
-  const ataIx = createAssociatedTokenAccountIdempotentInstruction(
-    userPubkey,  // payer
-    ata,         // associatedToken
-    userPubkey,  // owner
-    mintPubkey   // mint
+  const account = await getOrCreateAssociatedTokenAccount(
+    connection,
+    userKeypair,
+    mintPubkey,
+    userKeypair.publicKey
   );
-  const ataTx = new Transaction().add(ataIx);
-  ataTx.feePayer = userPubkey;
-  ataTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
-  const ataSig = await connection.sendTransaction(ataTx, [userKeypair], { maxRetries: 3 });
-  await connection.confirmTransaction(ataSig, 'confirmed');
-  return ata;
+  return account.address;
 }
 
 async function readBuybackFeeRecipient() {
