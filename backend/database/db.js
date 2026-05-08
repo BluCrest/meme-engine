@@ -203,14 +203,13 @@ module.exports = {
     );
   },
   markExitTierHit: async (id, threshold) => {
-  },
-  getPaperTrading,
-  setPaperTrading
     const db = await connect();
     const key = `sold_${threshold}`;
     return db.collection('positions').updateOne(
       { _id: id },
       { $set: { [key]: true } }
     );
-  }
+  },
+  getPaperTrading,
+  setPaperTrading
 };
