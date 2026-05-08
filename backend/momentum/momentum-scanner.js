@@ -3,7 +3,6 @@ const { waitForToken } = require('../utils/rate-limiter');
 const copyTrader = require('../agents/copy-trader');
 
 const SCAN_INTERVAL = 15000; // 15s for near-instant sniping
-const DEXPAPRIKA_BASE = 'https://api.dexpaprika.com';
 
 const volumeHistory = new Map();
 let seenTokens = new Set();
@@ -25,20 +24,20 @@ function isKnownNonMeme(addr) { return KNOWN_NON_MEME.has(addr); }
 let seenClearedAt = Date.now();
 const SEEN_CLEAR_INTERVAL = 300000;
 
-async function fetchPaprikaVolume(tokenAddress) {
+async function fetchDexVolume(tokenAddress) {
   try {
-    await waitForToken('dexpaprika', 5, 1000); // max 5 req/s for free tier
-    const res = await fetchWithRetry(`${DEXPAPRIKA_BASE}/networks/solana/tokens/${tokenAddress}`, { timeout: 6000 });
+    await waitForToken('dexscreener', 15, 1000);
+    const res = await fetchWithRetry(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, { timeout: 6000 });
     if (!res || !res.ok) return null;
     const data = await res.json();
-    const s = data.summary;
-    if (!s) return null;
+    const pair = data.pairs?.[0];
+    if (!pair) return null;
     return {
-      vol5m: s['5m']?.volume_usd || 0,
-      buys5m: s['5m']?.buys || 0,
-      sells5m: s['5m']?.sells || 0,
-      txns5m: s['5m']?.txns || 0,
-      vol1h: s['1h']?.volume_usd || 0
+      vol5m: pair.volume?.m5 || 0,
+      buys5m: pair.txns?.m5?.buys || 0,
+      sells5m: pair.txns?.m5?.sells || 0,
+      txns5m: (pair.txns?.m5?.buys || 0) + (pair.txns?.m5?.sells || 0),
+      vol1h: pair.volume?.h1 || 0
     };
   } catch (_) { return null; }
 }
@@ -115,7 +114,7 @@ async function scanMomentum() {
     if (zeroTxnCooldown.has(addr)) continue;
 
     const deployer = profile.creator?.address || null;
-    const paprika = await fetchPaprikaVolume(addr);
+    const paprika = await fetchDexVolume(addr);
     if (!paprika) continue;
 
     // 0-txn tokens: add to short cooldown instead of permanent seenTokens
@@ -163,7 +162,7 @@ async function scanMomentum() {
     const volH1 = pair.volume?.h1 || 0;
     if (volH1 < 50) continue;
 
-    const paprika = await fetchPaprikaVolume(addr);
+    const paprika = await fetchDexVolume(addr);
     if (!paprika || paprika.txns5m < 2) continue;
 
     const momentum = checkMomentum(addr, paprika);
