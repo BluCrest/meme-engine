@@ -8,6 +8,29 @@ const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ALERT_THRESHOLD = 50;
 const MAX_ALERTS = 20;
 
+// Register command list with Telegram so they show up in the / menu
+async function registerCommands() {
+  try {
+    await sendTelegram('setMyCommands', {
+      commands: [
+        { command: 'start', description: 'Bot info' },
+        { command: 'portfolio', description: 'Wallet balance' },
+        { command: 'positions', description: 'Open positions' },
+        { command: 'momentum', description: 'Active momentum trades' },
+        { command: 'copywallets', description: 'Top tracked wallets' },
+        { command: 'pnl', description: 'P&L summary' },
+        { command: 'trades', description: 'Recent trades' },
+        { command: 'papertrading', description: 'Toggle paper trading on/off' },
+        { command: 'help', description: 'All commands' },
+      ]
+    });
+    console.log('[Telegram] Commands registered');
+  } catch (e) {
+    console.error('[Telegram] Failed to register commands:', e.message);
+  }
+}
+registerCommands();
+
 const pendingAlerts = new Map();
 const queuedAlerts = [];
 
