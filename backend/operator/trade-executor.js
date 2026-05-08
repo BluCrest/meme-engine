@@ -181,8 +181,8 @@ async function executeBuy(tokenAddr, mode, amountSol) {
 
     return { success: true, signature: sig, trade: trade };
   } catch (e) {
-    console.error('[Executor] Buy failed:', e.message);
-    return { success: false, error: e.message };
+    console.error('[Executor] Buy failed:', e?.message || e, e?.stack ? '\n' + e.stack : '');
+    return { success: false, error: e?.message || String(e) };
   }
 }
 
