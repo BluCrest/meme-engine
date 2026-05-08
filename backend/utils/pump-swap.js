@@ -120,8 +120,11 @@ async function ensureATA(userKeypair, tokenMint, tx) {
   const mintPubkey = new PublicKey(tokenMint);
   const ata = getAssociatedTokenAddressSync(mintPubkey, userKeypair.publicKey);
   try {
-    const acc = await getConn().getAccountInfo(ata);
-    if (acc) return ata;
+    const conn = getConn();
+    if (conn) {
+      const acc = await conn.getAccountInfo(ata);
+      if (acc) return ata;
+    }
   } catch {}
   tx.add(createAssociatedTokenAccountIdempotentInstruction(
     userKeypair.publicKey, ata, userKeypair.publicKey, mintPubkey
