@@ -1,5 +1,5 @@
 const { PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
-const { getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const { executeWithFallback, getConnection } = require('./rpc-rotator');
 const crypto = require('crypto');
 const config = require('../config');
@@ -116,35 +116,17 @@ function toBufferLE(num, bytes) {
   return buf;
 }
 
-async function createATAIfMissing(userKeypair, tokenMint) {
+async function ensureATA(userKeypair, tokenMint, tx) {
   const mintPubkey = new PublicKey(tokenMint);
   const ata = getAssociatedTokenAddressSync(mintPubkey, userKeypair.publicKey);
   try {
-    const account = await getOrCreateAssociatedTokenAccount(
-      getConn(),
-      userKeypair,
-      mintPubkey,
-      userKeypair.publicKey
-    );
-    return account.address;
-  } catch (_) {
-    // RPC rate-limited — try manual ATA creation via idempotent instruction
-    try {
-      const conn = getConn();
-      const ix = createAssociatedTokenAccountIdempotentInstruction(
-        userKeypair.publicKey, ata, userKeypair.publicKey, mintPubkey
-      );
-      const tx = new Transaction().add(ix);
-      tx.feePayer = userKeypair.publicKey;
-      tx.recentBlockhash = (await conn.getLatestBlockhash('confirmed')).blockhash;
-      const sig = await conn.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
-      await conn.confirmTransaction(sig, 'confirmed');
-      console.log(`[PumpSwap] Created ATA for ${tokenMint.slice(0, 8)}...`);
-      return ata;
-    } catch (e2) {
-      throw new Error(`ATA creation failed for ${tokenMint.slice(0, 8)}...: ${e2.message}`);
-    }
-  }
+    const acc = await getConn().getAccountInfo(ata);
+    if (acc) return ata;
+  } catch {}
+  tx.add(createAssociatedTokenAccountIdempotentInstruction(
+    userKeypair.publicKey, ata, userKeypair.publicKey, mintPubkey
+  ));
+  return ata;
 }
 
 async function readBuybackFeeRecipient() {
@@ -185,7 +167,7 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
   const feeRecipient    = opts.feeRecipient || (await readBuybackFeeRecipient()) || new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
 
   const tx = new Transaction();
-  const userATA = await createATAIfMissing(userKeypair, tokenMint);
+  const userATA = await ensureATA(userKeypair, tokenMint, tx);
 
   // ── Use buy_exact_sol_in (most natural: "spend X SOL, get ≥Y tokens") ──
   // data: discriminator(8) + spendable_sol_in(8) + min_tokens_out(8) + track_volume(1 = None)
@@ -196,7 +178,6 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
     Buffer.from([0x00]),                       // track_volume: None
   ]);
 
-  // Accounts 13-14 are required PDAs (not optional), 15-16 are optional
   const keys = [
     { pubkey: globalPDA,      isSigner: false, isWritable: false },  // 1  global
     { pubkey: feeRecipient,   isSigner: false, isWritable: true  },  // 2  fee_recipient
@@ -212,8 +193,8 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
     { pubkey: PUMP_PROGRAM_ID,   isSigner: false, isWritable: false }, // 12 program
     { pubkey: globalVolAcc,   isSigner: false, isWritable: false },  // 13 global_volume_accumulator (required PDA)
     { pubkey: userVolAcc,     isSigner: false, isWritable: true  },  // 14 user_volume_accumulator (required PDA)
-    { pubkey: SYSTEM_PROGRAM_ID,  isSigner: false, isWritable: false }, // 15 fee_config (optional)
-    { pubkey: PUMP_FEE_PROGRAM_ID, isSigner: false, isWritable: false }, // 16 fee_program (optional)
+    { pubkey: feeConfigPDA,   isSigner: false, isWritable: false },  // 15 fee_config
+    { pubkey: PUMP_FEE_PROGRAM_ID, isSigner: false, isWritable: false }, // 16 fee_program
   ];
 
   tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
@@ -242,7 +223,7 @@ async function pumpSell(userKeypair, tokenMint, tokenAmount) {
   const feeRecipient   = (await readBuybackFeeRecipient()) || new PublicKey('62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV');
 
   const tx = new Transaction();
-  const userATA = await createATAIfMissing(userKeypair, tokenMint);
+  const userATA = await ensureATA(userKeypair, tokenMint, tx);
 
   const data = Buffer.concat([
     SELL_DISCRIMINATOR,
@@ -250,7 +231,7 @@ async function pumpSell(userKeypair, tokenMint, tokenAmount) {
     toBufferLE(new BN(0), 8),          // min_sol_output — accept any return
   ]);
 
-  // Sell accounts per official IDL (14 accounts, last 2 optional)
+  // Sell accounts per buy pattern
   const keys = [
     { pubkey: globalPDA,      isSigner: false, isWritable: false },  // 1  global
     { pubkey: feeRecipient,   isSigner: false, isWritable: true  },  // 2  fee_recipient
@@ -264,8 +245,8 @@ async function pumpSell(userKeypair, tokenMint, tokenAmount) {
     { pubkey: TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false }, // 10 token_program
     { pubkey: eventAuthority, isSigner: false, isWritable: false },  // 11 event_authority
     { pubkey: PUMP_PROGRAM_ID,   isSigner: false, isWritable: false }, // 12 program
-    { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false }, // 13 fee_config (optional)
-    { pubkey: PUMP_FEE_PROGRAM_ID, isSigner: false, isWritable: false }, // 14 fee_program (optional)
+    { pubkey: feeConfigPDA,   isSigner: false, isWritable: false },  // 13 fee_config
+    { pubkey: PUMP_FEE_PROGRAM_ID, isSigner: false, isWritable: false }, // 14 fee_program
   ];
 
   tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
