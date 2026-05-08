@@ -307,8 +307,10 @@ async function handleUpdate(update) {
 
   const chatId = msg.chat?.id;
   const text = msg.text;
+  const cmd = text?.split(' ')[0]?.replace(/@\w+$/, '').toLowerCase(); // normalize command
+  const arg = text?.split(' ').slice(1).join(' ');
 
-  if (text === '/start') {
+  if (cmd === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
       text: '🚀 *Meme Engine Active!*\n\n⚡ Momentum sniping active — scans for volume spikes every 60s, auto-buys on buy pressure. Legacy scoring still running for quality plays.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/momentum - Active momentum trades\n/pnl - P&L summary\n/trades - Recent trades\n/help - All commands',
@@ -316,7 +318,7 @@ async function handleUpdate(update) {
     });
   }
 
-  if (text === '/portfolio') {
+  if (cmd === '/portfolio') {
     const { getBalance } = require('./trade-executor');
     const bal = await getBalance();
     await sendTelegram('sendMessage', {
@@ -326,7 +328,7 @@ async function handleUpdate(update) {
     });
   }
 
-  if (text === '/positions') {
+  if (cmd === '/positions') {
     const db = require('../database/db');
     const positions = await db.getDb().collection('positions').find({ status: 'open' }).toArray();
     if (!positions.length) {
@@ -342,7 +344,7 @@ async function handleUpdate(update) {
     await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
   }
 
-  if (text === '/pnl') {
+  if (cmd === '/pnl') {
     const { getBalance } = require('./trade-executor');
     const { checkCircuitBreakers } = require('./exit-manager');
     const openPositions = await db.getDb().collection('positions').find({ status: 'open' }).toArray();
@@ -379,7 +381,7 @@ Use /portfolio for balance, /positions for open trades`;
     await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
   }
 
-  if (text === '/trades') {
+  if (cmd === '/trades') {
     const trades = await db.getDb().collection('trades').find().sort({ timestamp: -1 }).limit(10).toArray();
     if (!trades.length) {
       await sendTelegram('sendMessage', { chat_id: chatId, text: 'No trades yet.' });
@@ -395,7 +397,7 @@ Use /portfolio for balance, /positions for open trades`;
     await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
   }
 
-  if (text === '/momentum') {
+  if (cmd === '/momentum') {
     try {
       const { activePositions } = require('../momentum/momentum-trader');
       const { getBalance } = require('./trade-executor');
@@ -420,7 +422,7 @@ Use /portfolio for balance, /positions for open trades`;
     }
   }
 
-  if (text === '/copywallets') {
+  if (cmd === '/copywallets') {
     try {
       const copyTrader = require('../agents/copy-trader');
       const wallets = copyTrader.getTopWallets(10);
@@ -440,7 +442,7 @@ Use /portfolio for balance, /positions for open trades`;
     }
   }
 
-  if (text === '/help') {
+  if (cmd === '/help') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
       text: `🚀 *Meme Engine Commands*
@@ -462,14 +464,12 @@ Stops after 3 consecutive losses or daily loss limit.`,
     });
   }
 
-  if (text === '/papertrading' || text?.startsWith('/papertrading ')) {
-    const parts = text.split(' ');
-    const action = parts[1];
+  if (cmd === '/papertrading') {
     const { getPaperTrading, setPaperTrading } = require('../database/db');
-    if (action === 'on') {
+    if (arg === 'on') {
       await setPaperTrading(true);
       await sendTelegram('sendMessage', { chat_id: chatId, text: '📝 Paper trading: *ON* — no real transactions will be executed', parse_mode: 'Markdown' });
-    } else if (action === 'off') {
+    } else if (arg === 'off') {
       await setPaperTrading(false);
       await sendTelegram('sendMessage', { chat_id: chatId, text: '🔥 Paper trading: *OFF* — real transactions will be executed', parse_mode: 'Markdown' });
     } else {
