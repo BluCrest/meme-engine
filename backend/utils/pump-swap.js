@@ -144,7 +144,7 @@ async function createATAIfMissing(userKeypair, tokenMint) {
   });
   const ataTx = new Transaction().add(ataIx);
   ataTx.feePayer = userPubkey;
-  ataTx.recentBlockhash = (await connection.getRecentBlockhash()).blockhash;
+  ataTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
   const ataSig = await connection.sendTransaction(ataTx, [userKeypair], { maxRetries: 3 });
   await connection.confirmTransaction(ataSig, 'confirmed');
   return ata;
@@ -211,7 +211,7 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
 
   tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
   tx.feePayer = userPubkey;
-  tx.recentBlockhash = (await connection.getRecentBlockhash()).blockhash;
+  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
 
   const sig = await connection.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
   await connection.confirmTransaction(sig, 'confirmed');
@@ -262,7 +262,7 @@ async function pumpSell(userKeypair, tokenMint, tokenAmount) {
 
   tx.add(new TransactionInstruction({ programId: PUMP_PROGRAM_ID, keys, data }));
   tx.feePayer = userPubkey;
-  tx.recentBlockhash = (await connection.getRecentBlockhash()).blockhash;
+  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
 
   const sig = await connection.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
   await connection.confirmTransaction(sig, 'confirmed');

@@ -175,7 +175,7 @@ module.exports = {
   upsertPosition: async (position) => {
     const db = await connect();
     return db.collection('positions').updateOne(
-      { token_address: position.tokenAddress },
+      { token_address: position.token_address },
       { $set: position },
       { upsert: true }
     );

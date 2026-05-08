@@ -258,7 +258,7 @@ async function runExitManager() {
 
 let exitInterval;
 function startExitManager() {
-  const interval = (config.config.divergenceCheckInterval || 120) * 1000;
+  const interval = (config.config.divergenceCheckInterval || 15) * 1000;
   exitInterval = setInterval(runExitManager, interval);
   console.log(`[ExitMgr] Started, checking every ${interval / 1000}s`);
 }

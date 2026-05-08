@@ -100,7 +100,7 @@ async function processNewToken(tokenAddress) {
     // Compute score and alert
     const result = await computeFinalScore(tokenAddress);
 
-    if (result.apeProbability >= 0) {
+    if (result.apeProbability >= 50) {
       const token = await db.getToken(tokenAddress);
       queueScoredToken(token, result);
     }

@@ -6,6 +6,7 @@ const DEXPAPRIKA_BASE = 'https://api.dexpaprika.com';
 
 const volumeHistory = new Map();
 let seenTokens = new Set();
+const zeroTxnCooldown = new Map(); // addr -> timestamp, cleared after 60s
 
 // Well-known non-memecoin addresses — skip these
 const KNOWN_NON_MEME = new Set([
@@ -97,22 +98,33 @@ async function scanMomentum() {
 
   const triggers = [];
 
+  // Clean expired zeroTxnCooldown entries
+  for (const [addr, ts] of zeroTxnCooldown) {
+    if (Date.now() - ts > 60000) zeroTxnCooldown.delete(addr);
+  }
+
   // PATH 1: Token profiles — new launch detection for sniping
   const profiles = await fetchTokenProfiles();
   for (const profile of (profiles || []).slice(0, 50)) {
     const addr = profile.tokenAddress;
     if (!addr || addr.length < 32 || addr.length > 44) continue;
     if (isKnownNonMeme(addr)) continue;
-
-    const isNew = !seenTokens.has(addr);
-    seenTokens.add(addr);
-    if (!isNew) continue;
+    if (seenTokens.has(addr)) continue;
+    if (zeroTxnCooldown.has(addr)) continue;
 
     const deployer = profile.creator?.address || null;
     const paprika = await fetchPaprikaVolume(addr);
     if (!paprika) continue;
 
-    const momentum = paprika.txns5m >= 1 ? checkMomentum(addr, paprika) : null;
+    // 0-txn tokens: add to short cooldown instead of permanent seenTokens
+    if (paprika.txns5m === 0) {
+      zeroTxnCooldown.set(addr, Date.now());
+      continue;
+    }
+
+    seenTokens.add(addr);
+
+    const momentum = checkMomentum(addr, paprika);
 
     // Copy trade check
     let copyTradeSignal = null;
@@ -131,7 +143,7 @@ async function scanMomentum() {
       paprika,
       copyTradeSignal,
       deployer,
-      isSnipe: !momentum // snipe if no momentum data yet
+      isSnipe: !momentum
     });
   }
 

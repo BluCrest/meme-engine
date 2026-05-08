@@ -156,7 +156,7 @@ async function executeBuy(tokenAddr, mode, amountSol) {
     };
     await db.insertTrade(trade);
     await db.upsertPosition({
-      tokenAddress: tokenAddr,
+      token_address: tokenAddr,
       entry_price: price,
       entry_mc: mc,
       sol_invested: amountSol,
@@ -219,6 +219,8 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       sig = result.signature;
       solVal = sellAmt * 0.9; // rough estimate after fees
     }
+    const price = await getCurrentPrice(tokenAddr);
+    const mc = await getCurrentMC(tokenAddr);
     const trade = {
       token_address: tokenAddr,
       action: 'sell',

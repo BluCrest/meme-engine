@@ -14,6 +14,7 @@ const CHAT_ID = config.telegram.chatId;
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 let activePositions = new Map();
+const snipePending = new Set();
 
 async function sendTelegramMessage(text) {
   try {
@@ -164,8 +165,12 @@ async function handleMomentumTrigger(trigger) {
   const pct = pctMap[trigger.momentum.trigger] || 0.08;
 
   // For snipes: only buy if we see at least some initial activity
-  if (trigger.isSnipe && trigger.paprika && trigger.paprika.txns5m === 0) {
-    // Token exists on DexScreener but has zero trades — hold for next cycle
+  if (trigger.isSnipe && trigger.paprika?.txns5m === 0) {
+    if (!snipePending.has(trigger.address)) {
+      snipePending.add(trigger.address);
+      return;
+    }
+    snipePending.delete(trigger.address);
     return;
   }
 

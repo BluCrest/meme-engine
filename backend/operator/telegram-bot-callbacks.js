@@ -25,11 +25,21 @@ async function handleCallback(query) {
 
   switch (action) {
     case 'ape':
-      await sendTelegram('answerCallbackQuery', {
-        callback_query_id: query.id,
-        text: '🚀 Ape in! Check /buy endpoint',
-        show_alert: true
-      });
+      try {
+        const { executeBuy } = require('./trade-executor');
+        const result = await executeBuy(address);
+        await sendTelegram('answerCallbackQuery', {
+          callback_query_id: query.id,
+          text: result.success ? '✅ Buy executed!' : '❌ Buy failed: ' + result.error,
+          show_alert: true
+        });
+      } catch (e) {
+        await sendTelegram('answerCallbackQuery', {
+          callback_query_id: query.id,
+          text: '❌ Error: ' + e.message,
+          show_alert: true
+        });
+      }
       break;
     case 'skip':
       await db.upsertToken({ address, status: 'passed' });
