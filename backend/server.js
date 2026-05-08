@@ -249,10 +249,12 @@ app.get('/cluster/:tokenAddress', async (req, res) => {
 // Register Telegram webhook so the bot can receive updates
 async function registerTelegramWebhook() {
   const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
+  // Always start polling as reliable fallback
+  const { startPolling } = require('./operator/telegram-bot');
+  startPolling();
+  // Also register webhook if URL is configured (for real-time response)
   if (!webhookUrl) {
-    console.log('[Telegram] No TELEGRAM_WEBHOOK_URL set, deleting any old webhook and falling back to polling.');
     try { await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/deleteWebhook`); } catch {}
-    startPolling();
     return;
   }
   try {
@@ -262,36 +264,7 @@ async function registerTelegramWebhook() {
     console.log('[Telegram] Webhook registered:', data.description || (data.ok ? 'OK' : 'FAILED'));
   } catch (err) {
     console.error('[Telegram] Webhook registration failed:', err.message);
-    startPolling();
   }
-}
-
-let pollingOffset = 0;
-async function pollTelegramUpdates() {
-  try {
-    const url = `https://api.telegram.org/bot${config.telegram.botToken}/getUpdates?offset=${pollingOffset}&timeout=10`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data.ok && data.result?.length) {
-      for (const update of data.result) {
-        pollingOffset = update.update_id + 1;
-        const { handleUpdate } = require('./operator/telegram-bot');
-        const { handleCallback } = require('./operator/telegram-bot-callbacks');
-        if (update.callback_query) {
-          await handleCallback(update.callback_query);
-        } else if (update.message) {
-          await handleUpdate({ message: update.message });
-        }
-      }
-    }
-  } catch (err) {
-    // silent
-  }
-}
-
-function startPolling() {
-  console.log('[Telegram] Polling getUpdates for commands every 3s');
-  setInterval(pollTelegramUpdates, 3000);
 }
 
 // Start all services

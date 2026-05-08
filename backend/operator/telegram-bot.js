@@ -5,6 +5,36 @@ const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
+// Poll getUpdates so commands work without a webhook URL
+let pollingOffset = 0;
+let pollingInterval;
+
+async function pollUpdates() {
+  try {
+    const url = `${API_BASE}/getUpdates?offset=${pollingOffset}&timeout=5`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.ok) return;
+    for (const update of data.result || []) {
+      pollingOffset = update.update_id + 1;
+      if (update.callback_query) {
+        const { handleCallback } = require('./telegram-bot-callbacks');
+        await handleCallback(update.callback_query);
+      } else if (update.message?.text) {
+        await handleUpdate({ message: update.message });
+      }
+    }
+  } catch (e) {
+    // polling errors are non-fatal
+  }
+}
+
+function startPolling() {
+  if (pollingInterval) return;
+  pollingInterval = setInterval(pollUpdates, 3000);
+  console.log('[Telegram] Polling getUpdates every 3s for commands');
+}
+
 const ALERT_THRESHOLD = 50;
 const MAX_ALERTS = 20;
 
@@ -529,4 +559,4 @@ ${result.graduationInfo?.graduationSignal === 'graduating_now' ? '🎓 Graduatin
   });
 }
 
-module.exports = { sendTokenAlert, queueScoredToken, flushTopAlerts, startAlertBatcher, handleUpdate, sendTradeNotification, sendUrgentAlert };
+module.exports = { sendTokenAlert, queueScoredToken, flushTopAlerts, startAlertBatcher, startPolling, handleUpdate, sendTradeNotification, sendUrgentAlert };
