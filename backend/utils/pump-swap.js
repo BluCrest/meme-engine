@@ -122,7 +122,7 @@ function toBufferLE(num, bytes) {
 async function createATAIfMissing(userKeypair, tokenMint) {
   const mintPubkey = new PublicKey(tokenMint);
   const account = await getOrCreateAssociatedTokenAccount(
-    connection,
+    getConn(),
     userKeypair,
     mintPubkey,
     userKeypair.publicKey
