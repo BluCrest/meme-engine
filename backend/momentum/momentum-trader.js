@@ -7,7 +7,9 @@ const TAKE_PROFIT = 1.5;
 const STOP_LOSS = -0.30;
 const TRAILING_PCT = 0.12;
 const MAX_POSITIONS = 4;
+const MAX_SNIPE_POSITIONS = 1; // Only 1 snipe at a time — sell before next
 const MIN_BUY = 0.002;
+const MIN_BALANCE_FLOOR = 0.01; // Stop ALL buying if balance below this
 
 const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
@@ -139,10 +141,44 @@ async function monitorPositions() {
   }
 }
 
+async function sellSnipePositionsBeforeNewBuy() {
+  // Sell existing snipe positions to free up balance for new snipe
+  const snipePositions = [];
+  for (const [addr, pos] of activePositions) {
+    if (pos.trigger === 'snipe') {
+      snipePositions.push({ addr, pos });
+    }
+  }
+  // Sort by boughtAt ascending (oldest first)
+  snipePositions.sort((a, b) => a.pos.boughtAt - b.pos.boughtAt);
+  // Sell all existing snipe positions (or oldest if we want to keep one)
+  const toSell = snipePositions.slice(0, Math.max(0, snipePositions.length - MAX_SNIPE_POSITIONS + 1));
+  for (const { addr } of toSell) {
+    console.log(`[Momentum] Selling snipe ${addr.slice(0, 8)}... to free balance for new snipe`);
+    await executeMomentumSell(addr, 'replace_for_new_snipe');
+  }
+}
+
 async function handleMomentumTrigger(trigger) {
-  if (activePositions.size >= MAX_POSITIONS) {
-    console.log(`[Momentum] ${trigger.symbol}: max positions (${MAX_POSITIONS})`);
+  // Balance floor: don't even try if balance is critically low
+  const currentBal = await getBalance();
+  if (currentBal < MIN_BALANCE_FLOOR) {
+    console.log(`[Momentum] Balance ${currentBal.toFixed(4)} SOL below floor ${MIN_BALANCE_FLOOR}, pausing new buys`);
     return;
+  }
+
+  if (activePositions.size >= MAX_POSITIONS) {
+    // If this is a snipe and we're at max, try replacing oldest snipe
+    if (trigger.isSnipe) {
+      await sellSnipePositionsBeforeNewBuy();
+      if (activePositions.size >= MAX_POSITIONS) {
+        console.log(`[Momentum] ${trigger.symbol}: still at max positions after cleanup`);
+        return;
+      }
+    } else {
+      console.log(`[Momentum] ${trigger.symbol}: max positions (${MAX_POSITIONS})`);
+      return;
+    }
   }
 
   // Check stop-loss cooldown
@@ -155,23 +191,21 @@ async function handleMomentumTrigger(trigger) {
 
   // Scale: snipe gets smallest, copy_trade gets largest
   const pctMap = {
-    snipe: 0.08,       // 8% of wallet for blind snipes
+    snipe: 0.05,       // 5% of wallet for snipes (reduced from 8%)
     first_activity: 0.10,
     high_activity: 0.10,
     buy_pressure: 0.12,
     strong: 0.15,
     copy_trade: 0.20
   };
-  const pct = pctMap[trigger.momentum.trigger] || 0.08;
+  const pct = pctMap[trigger.momentum.trigger] || 0.05;
 
-  // For snipes: only buy if we see at least some initial activity
-  if (trigger.isSnipe && trigger.paprika?.txns5m === 0) {
-    if (!snipePending.has(trigger.address)) {
-      snipePending.add(trigger.address);
-      return;
+  // For snipes: sell existing snipe positions before buying new one
+  if (trigger.isSnipe) {
+    const snipeCount = [...activePositions.values()].filter(p => p.trigger === 'snipe').length;
+    if (snipeCount >= MAX_SNIPE_POSITIONS) {
+      await sellSnipePositionsBeforeNewBuy();
     }
-    snipePending.delete(trigger.address);
-    return;
   }
 
   await executeMomentumBuy(trigger.address, trigger.symbol, pct, trigger.momentum.trigger);

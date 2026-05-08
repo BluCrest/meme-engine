@@ -1,4 +1,5 @@
 const db = require('../database/db');
+const config = require('../config');
 
 function isRecentlyUpdated(profile, minutes = 60) {
   if (!profile?.updated_at) return false;
@@ -38,6 +39,21 @@ async function getAllTokensCreatedBy(devWallet) {
   }
 }
 
+async function getTokenSnapshotsFromDB(tokenAddress) {
+  try {
+    const dbSnapshots = await db.getDb().collection('token_price_snapshots')
+      .find({ token_address: tokenAddress })
+      .sort({ timestamp: -1 })
+      .limit(20)
+      .toArray();
+    return dbSnapshots.map(s => ({
+      mc: s.mc || 0,
+      price: s.price || 0,
+      timestamp: new Date(s.timestamp).getTime()
+    }));
+  } catch (_) { return []; }
+}
+
 async function getPriceHistory(tokenAddress) {
   try {
     const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
@@ -45,13 +61,33 @@ async function getPriceHistory(tokenAddress) {
     const pair = data.pairs?.[0];
     if (!pair) return [];
 
-    // Return simplified price history from DexScreener
-    // In production, you'd want to store snapshots over time
-    return [{
+    const current = {
       mc: pair.fdv || 0,
       price: pair.priceUsd || 0,
-      timestamp: Date.now()
-    }];
+      timestamp: Date.now(),
+      priceChange24h: pair.priceChange?.h24 || 0
+    };
+
+    // Store snapshot for future rug detection
+    try {
+      await db.getDb().collection('token_price_snapshots').updateOne(
+        { token_address: tokenAddress, timestamp: new Date() },
+        { $set: { mc: current.mc, price: current.price, timestamp: new Date() } },
+        { upsert: true }
+      );
+    } catch (_) {}
+
+    // Merge with historical DB snapshots
+    const dbSnapshots = await getTokenSnapshotsFromDB(tokenAddress);
+    const allPoints = [...dbSnapshots, current];
+    // Deduplicate by timestamp rounded to minute
+    const seen = new Set();
+    return allPoints.filter(p => {
+      const key = Math.floor(p.timestamp / 60000);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   } catch (err) {
     console.error('[DevFinger] Price history error:', err.message);
     return [];
@@ -62,13 +98,22 @@ function detectRugPattern(priceHistory) {
   if (!priceHistory.length) return false;
   const peak = Math.max(...priceHistory.map(p => p.mc || 0));
   const last = priceHistory[priceHistory.length - 1]?.mc || 0;
-  return last < peak * 0.1; // 90%+ drop = rug
+  // Check for 90%+ drop from peak
+  if (peak > 0 && last < peak * 0.1) return true;
+  // Also check 24h price change if available
+  const lastEntry = priceHistory[priceHistory.length - 1];
+  if (lastEntry && lastEntry.priceChange24h < -90) return true;
+  return false;
 }
 
 function getTimeToRug(priceHistory) {
+  if (priceHistory.length < 2) return null;
   const peakIdx = priceHistory.reduce((maxIdx, p, i, arr) =>
     (p.mc || 0) > (arr[maxIdx]?.mc || 0) ? i : maxIdx, 0);
-  return peakIdx * 60 / 60; // placeholder: assumes 1 data point per minute
+  const rugPoint = priceHistory[priceHistory.length - 1];
+  const peakPoint = priceHistory[peakIdx];
+  if (!rugPoint || !peakPoint) return null;
+  return (rugPoint.timestamp - peakPoint.timestamp) / 3600000; // hours
 }
 
 function average(arr) {
@@ -88,6 +133,7 @@ async function buildDevProfile(devWallet) {
       const peakMC = Math.max(...priceHistory.map(p => p.mc || 0));
       const rugged = detectRugPattern(priceHistory);
       const timeToRug = rugged ? getTimeToRug(priceHistory) : null;
+      const firstMC = priceHistory.length > 0 ? priceHistory[0].mc || 0 : 0;
 
       return {
         tokenAddress: token.address,
@@ -96,7 +142,7 @@ async function buildDevProfile(devWallet) {
         peakMC,
         rugged,
         timeToRugHours: timeToRug,
-        peakReturn: token.launchMC ? peakMC / token.launchMC : 0
+        peakReturn: firstMC > 0 ? peakMC / firstMC : 0
       };
     })
   );

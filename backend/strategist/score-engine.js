@@ -34,23 +34,28 @@ async function computeFinalScore(tokenAddress) {
       await db.upsertToken({ address: tokenAddress, volume_24h: multiVol.volume_24h, multi_volume: multiVol });
     }
 
-    // Serialize checks to avoid RPC rate limits (was Promise.all — 20+ parallel calls)
-    const safety = await runSafetyCheck(tokenAddress);
-    await sleep(250);
-    const social = await computeViralityVelocity(tokenAddress, symbol);
-    await sleep(250);
-    const smartMoney = await getSmartMoneyScore(tokenAddress);
-    await sleep(250);
-    const devWallet = await getDevWallet(tokenAddress);
-    await sleep(250);
-    const clusterAnalysis = await analyzeWalletClusters(tokenAddress);
-    await sleep(250);
-    const bundleInfo = await detectBundles(tokenAddress, null);
-    await sleep(250);
-    const graduationInfo = await getBondingCurveProgress(tokenAddress);
-    await recordCurveSnapshot(tokenAddress); // velocity tracking
-    await sleep(250);
-    const divergenceCheck = await checkMomentumDivergence(tokenAddress);
+    // Batch RPC calls to avoid rate limits while maximizing parallelism
+    // Batch 1: safety (RPC-heavy) + social (DexScreener, no RPC) + devWallet (DB, no RPC)
+    const [safety, social, devWallet] = await Promise.all([
+      runSafetyCheck(tokenAddress),
+      computeViralityVelocity(tokenAddress, symbol),
+      getDevWallet(tokenAddress)
+    ]);
+    await sleep(300);
+
+    // Batch 2: smartMoney (RPC: holders) + clusterAnalysis (RPC)
+    const [smartMoney, clusterAnalysis] = await Promise.all([
+      getSmartMoneyScore(tokenAddress),
+      analyzeWalletClusters(tokenAddress)
+    ]);
+    await sleep(300);
+
+    // Batch 3: bundleInfo (RPC) + graduationInfo/velocity (RPC) + divergence (DexScreener + RPC)
+    const [bundleInfo, graduationInfo, divergenceCheck] = await Promise.all([
+      detectBundles(tokenAddress, null),
+      getBondingCurveProgress(tokenAddress).then(r => { recordCurveSnapshot(tokenAddress); return r; }),
+      checkMomentumDivergence(tokenAddress)
+    ]);
 
     const devProfile = devWallet ? await buildDevProfile(devWallet) : null;
 

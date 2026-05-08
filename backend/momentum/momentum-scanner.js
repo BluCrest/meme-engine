@@ -5,7 +5,7 @@ const copyTrader = require('../agents/copy-trader');
 const SCAN_INTERVAL = 15000; // 15s for near-instant sniping
 
 const volumeHistory = new Map();
-let seenTokens = new Set();
+let seenTokens = new Map(); // addr -> timestamp (TTL-based)
 const zeroTxnCooldown = new Map(); // addr -> timestamp, cleared after 60s
 
 // Well-known non-memecoin addresses — skip these
@@ -21,8 +21,10 @@ const KNOWN_NON_MEME = new Set([
   'J1toso1uCk3QLmjykT3ctL1A4EJukp4zq1K9PmCHqZR', // JitoSOL
 ]);
 function isKnownNonMeme(addr) { return KNOWN_NON_MEME.has(addr); }
+// TTL-based seenTokens: each entry is {addr, time} instead of a flat Set
+const SEEN_TTL = 600000; // 10 min — don't re-trigger same token within 10 min
 let seenClearedAt = Date.now();
-const SEEN_CLEAR_INTERVAL = 300000;
+const SEEN_CLEAN_INTERVAL = 60000; // clean stale entries every 60s
 
 async function fetchDexVolume(tokenAddress) {
   try {
@@ -37,7 +39,9 @@ async function fetchDexVolume(tokenAddress) {
       buys5m: pair.txns?.m5?.buys || 0,
       sells5m: pair.txns?.m5?.sells || 0,
       txns5m: (pair.txns?.m5?.buys || 0) + (pair.txns?.m5?.sells || 0),
-      vol1h: pair.volume?.h1 || 0
+      vol1h: pair.volume?.h1 || 0,
+      symbol: pair.baseToken?.symbol || null,
+      baseToken: pair.baseToken?.name || null
     };
   } catch (_) { return null; }
 }
@@ -58,6 +62,10 @@ async function fetchSearchPairs() {
     return data.pairs || [];
   } catch (_) { return []; }
 }
+
+// Minimum thresholds for sniping (blind buys)
+const MIN_SNIPE_TXNS = 3;       // at least 3 transactions in 5m
+const MIN_SNIPE_VOL_USD = 50;   // at least $50 volume in 5m (DexScreener returns USD)
 
 function checkMomentum(address, paprika) {
   const history = volumeHistory.get(address) || [];
@@ -92,8 +100,11 @@ function checkMomentum(address, paprika) {
 }
 
 async function scanMomentum() {
-  if (Date.now() - seenClearedAt > SEEN_CLEAR_INTERVAL) {
-    seenTokens = new Set();
+  // Prune stale seen entries instead of clearing everything (prevents trigger bursts)
+  if (Date.now() - seenClearedAt > SEEN_CLEAN_INTERVAL) {
+    for (const [addr, ts] of seenTokens) {
+      if (Date.now() - ts > SEEN_TTL) seenTokens.delete(addr);
+    }
     seenClearedAt = Date.now();
   }
 
@@ -117,13 +128,21 @@ async function scanMomentum() {
     const paprika = await fetchDexVolume(addr);
     if (!paprika) continue;
 
+    // Resolve symbol: profile first, fallback to DexScreener pair data
+    const resolvedSymbol = profile.symbol || paprika.symbol || '?';
+    const resolvedName = profile.name || paprika.baseToken || '';
+
     // 0-txn tokens: add to short cooldown instead of permanent seenTokens
     if (paprika.txns5m === 0) {
       zeroTxnCooldown.set(addr, Date.now());
       continue;
     }
 
-    seenTokens.add(addr);
+    // Check if we already have an open position or recent trade for this token
+    const existingPos = [...require('./momentum-trader').activePositions.values()].find(p => p.tokenAddress === addr);
+    if (existingPos) continue;
+
+    seenTokens.set(addr, Date.now());
 
     const momentum = checkMomentum(addr, paprika);
 
@@ -132,15 +151,24 @@ async function scanMomentum() {
     if (deployer) {
       const profitable = await copyTrader.isProfitableDeployer(deployer);
       if (profitable) copyTradeSignal = { wallet: deployer, reason: `profitable deployer (score:${profitable.score})`, score: profitable.score };
-      copyTrader.observeToken(addr, deployer, profile.symbol || '?', null);
+      copyTrader.observeToken(addr, deployer, resolvedSymbol, null);
     }
 
-    // SNIPE: every new token gets bought immediately (if we have capacity)
+    // Only trigger if there's real activity or a profitable deployer
+    const hasRealActivity = paprika.txns5m >= MIN_SNIPE_TXNS && paprika.vol5m >= MIN_SNIPE_VOL_USD;
+    const hasCopySignal = copyTradeSignal && copyTradeSignal.score > 15;
+
+    if (!momentum && !hasRealActivity && !hasCopySignal) {
+      // Low quality — skip instead of blind sniping
+      zeroTxnCooldown.set(addr, Date.now());
+      continue;
+    }
+
     triggers.push({
       address: addr,
-      symbol: profile.symbol || '?',
-      name: profile.name || '',
-      momentum: momentum || { trigger: 'snipe', reason: 'new launch', buyRatio: 0, totalTxns5m: 0, vol5m: 0 },
+      symbol: resolvedSymbol,
+      name: resolvedName,
+      momentum: momentum || { trigger: 'snipe', reason: `activity ${paprika.txns5m}txns $${paprika.vol5m} vol`, buyRatio: 0, totalTxns5m: paprika.txns5m, vol5m: paprika.vol5m },
       paprika,
       copyTradeSignal,
       deployer,
@@ -155,7 +183,7 @@ async function scanMomentum() {
     if (!addr || addr.length < 32 || addr.length > 44) continue;
     if (isKnownNonMeme(addr)) continue;
     if (seenTokens.has(addr)) continue;
-    seenTokens.add(addr);
+    seenTokens.set(addr, Date.now());
 
     const mc = pair.fdv || 0;
     if (mc > 50000) continue;
