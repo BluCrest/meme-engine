@@ -31,6 +31,18 @@ app.get('/', (req, res) => {
   });
 });
 
+// Test endpoint: verify bot is reachable
+app.get('/telegram/test', async (req, res) => {
+  try {
+    const config = require('./config');
+    const r = await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/getMe`);
+    const data = await r.json();
+    res.json({ ok: true, bot: data });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 // Telegram webhook endpoint (handles all updates)
 app.post('/telegram/callback', async (req, res) => {
   try {

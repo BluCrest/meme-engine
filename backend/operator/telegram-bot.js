@@ -14,24 +14,31 @@ async function pollUpdates() {
     const url = `${API_BASE}/getUpdates?offset=${pollingOffset}&timeout=5`;
     const res = await fetch(url);
     const data = await res.json();
-    if (!data.ok) return;
-    for (const update of data.result || []) {
-      pollingOffset = update.update_id + 1;
-      if (update.callback_query) {
-        const { handleCallback } = require('./telegram-bot-callbacks');
-        await handleCallback(update.callback_query);
-      } else if (update.message?.text) {
-        await handleUpdate({ message: update.message });
+    if (!data.ok) { console.log('[TG Poll] API error:', data); return; }
+    if (data.result?.length) {
+      console.log(`[TG Poll] ${data.result.length} update(s), offset=${pollingOffset}`);
+      for (const update of data.result) {
+        pollingOffset = update.update_id + 1;
+        if (update.callback_query) {
+          const { handleCallback } = require('./telegram-bot-callbacks');
+          await handleCallback(update.callback_query);
+        } else if (update.message) {
+          await handleUpdate({ message: update.message });
+        }
       }
     }
   } catch (e) {
-    // polling errors are non-fatal
+    console.log('[TG Poll] fetch error:', e.message);
   }
 }
 
 function startPolling() {
   if (pollingInterval) return;
+  // Delete any lingering webhook so getUpdates returns all updates
+  fetch(`${API_BASE}/deleteWebhook`).catch(() => {});
   pollingInterval = setInterval(pollUpdates, 3000);
+  // Also fire immediately
+  setTimeout(pollUpdates, 500);
   console.log('[Telegram] Polling getUpdates every 3s for commands');
 }
 
