@@ -7,7 +7,6 @@ const { detectBundles } = require('../sentinel/bundle-detector');
 const { getBondingCurveProgress } = require('./graduation-tracker');
 const { checkMomentumDivergence } = require('../detective/momentum-divergence');
 const { findMatchingPatterns } = require('./pattern-matcher');
-const { recordCurveSnapshot } = require('./graduation-tracker');
 const { getMultiSourceVolume } = require('../utils/multi-volume');
 const { checkVitality } = require('../utils/token-vitality');
 const patternMemory = require('../agents/pattern-memory');
@@ -53,7 +52,7 @@ async function computeFinalScore(tokenAddress) {
     // Batch 3: bundleInfo (RPC) + graduationInfo/velocity (RPC) + divergence (DexScreener + RPC)
     const [bundleInfo, graduationInfo, divergenceCheck] = await Promise.all([
       detectBundles(tokenAddress, null),
-      getBondingCurveProgress(tokenAddress).then(r => { recordCurveSnapshot(tokenAddress); return r; }),
+      getBondingCurveProgress(tokenAddress),
       checkMomentumDivergence(tokenAddress)
     ]);
 

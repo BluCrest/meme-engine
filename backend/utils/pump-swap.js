@@ -1,5 +1,5 @@
 const { PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
-const { getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const { executeWithFallback, getConnection } = require('./rpc-rotator');
 const crypto = require('crypto');
 const config = require('../config');
@@ -118,13 +118,30 @@ function toBufferLE(num, bytes) {
 
 async function createATAIfMissing(userKeypair, tokenMint) {
   const mintPubkey = new PublicKey(tokenMint);
-  const account = await getOrCreateAssociatedTokenAccount(
-    getConn(),
-    userKeypair,
-    mintPubkey,
-    userKeypair.publicKey
-  );
-  return account.address;
+  const ata = getAssociatedTokenAddressSync(mintPubkey, userKeypair.publicKey);
+  try {
+    const account = await getOrCreateAssociatedTokenAccount(
+      getConn(),
+      userKeypair,
+      mintPubkey,
+      userKeypair.publicKey
+    );
+    return account.address;
+  } catch (_) {
+    // RPC rate-limited — ATA might not exist, send instruction to create it
+    try {
+      const conn = getConn();
+      const ix = createAssociatedTokenAccountIdempotentInstruction(
+        userKeypair.publicKey, ata, userKeypair.publicKey, mintPubkey
+      );
+      const tx = new Transaction().add(ix);
+      tx.feePayer = userKeypair.publicKey;
+      tx.recentBlockhash = (await conn.getLatestBlockhash('confirmed')).blockhash;
+      const sig = await conn.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
+      await conn.confirmTransaction(sig, 'confirmed');
+    } catch (_) {}
+    return ata;
+  }
 }
 
 async function readBuybackFeeRecipient() {
