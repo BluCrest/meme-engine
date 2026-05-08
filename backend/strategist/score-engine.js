@@ -7,6 +7,7 @@ const { detectBundles } = require('../sentinel/bundle-detector');
 const { getBondingCurveProgress } = require('./graduation-tracker');
 const { checkMomentumDivergence } = require('../detective/momentum-divergence');
 const { findMatchingPatterns } = require('./pattern-matcher');
+const { recordCurveSnapshot } = require('./graduation-tracker');
 const { getMultiSourceVolume } = require('../utils/multi-volume');
 const { checkVitality } = require('../utils/token-vitality');
 const patternMemory = require('../agents/pattern-memory');
@@ -47,6 +48,7 @@ async function computeFinalScore(tokenAddress) {
     const bundleInfo = await detectBundles(tokenAddress, null);
     await sleep(250);
     const graduationInfo = await getBondingCurveProgress(tokenAddress);
+    await recordCurveSnapshot(tokenAddress); // velocity tracking
     await sleep(250);
     const divergenceCheck = await checkMomentumDivergence(tokenAddress);
 
@@ -97,6 +99,12 @@ async function computeFinalScore(tokenAddress) {
     // Multi-source volume bonus
     const multiSourceBonus = (token?.multi_volume?.volume_sources || 1) >= 2 ? 3 : 0;
 
+    // Bonding curve velocity bonus: fast SOL accumulation = high graduation probability
+    const velocity = graduationInfo.velocity;
+    const velocityBonus = velocity?.velocitySolPerMin > 1 ? 12 :
+      velocity?.velocitySolPerMin > 0.5 ? 8 :
+      velocity?.velocitySolPerMin > 0.2 ? 4 : 0;
+
     // Smart money confidence bonus: more smart wallets = higher conviction
     const smCount = smartMoney.smartMoneyCount || 0;
     const smConfidenceBonus = smCount >= 5 ? 10 : smCount >= 3 ? 6 : smCount >= 1 ? 2 : 0;
@@ -116,7 +124,8 @@ async function computeFinalScore(tokenAddress) {
       freshnessBonus +
       volMcBonus +
       multiSourceBonus +
-      smConfidenceBonus
+      smConfidenceBonus +
+      velocityBonus
     );
 
     if (bundleInfo.bundleDetected) apeProbability *= 0.6;

@@ -40,7 +40,8 @@ async function runSafetyCheck(tokenAddress) {
     let score = 100;
     if (!checks.ownershipRenounced) score -= 30;
     if (!checks.liquidityLocked) score -= 25;
-    if (checks.liquidityLockDuration < 24) score -= 10;
+    // Bonding curve tokens have no LP (duration=0) — don't penalize
+    if (checks.liquidityLocked && checks.liquidityLockDuration < 24) score -= 10;
     if (checks.top5Concentration > 50) score -= 20;
     if (checks.honeypot) score = 0;  // instant disqualify
 

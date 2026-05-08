@@ -457,4 +457,36 @@ async function sendTradeNotification(token, type, amount, pnl = null) {
   });
 }
 
-module.exports = { sendTokenAlert, queueScoredToken, flushTopAlerts, startAlertBatcher, handleUpdate, sendTradeNotification };
+// Urgent bypass: send high-confidence alerts immediately, skip batcher
+async function sendUrgentAlert(token, result) {
+  const riskEmoji = result.safety?.safetyScore > 70 ? '🟢' : result.safety?.safetyScore > 40 ? '🟡' : '🔴';
+  const symbol = token.symbol || 'UNKNOWN';
+  const mc = token.current_mc || 0;
+
+  const message = `⚡ *URGENT: $${symbol}* ${riskEmoji}
+━━━━━━━━━━━━━━━━━━━━
+Score: *${result.apeProbability}%* | MC: ${formatMC(mc)}
+Safety: ${result.safety?.safetyScore || '?'} | Conviction: ${result.conviction?.label || ''}
+${result.vitality?.momentum === 'active' ? '🔥 Momentum: ACTIVE\n' : ''}
+${result.graduationInfo?.graduationSignal === 'graduating_now' ? '🎓 Graduating NOW\n' : ''}
+
+*CA:* \`${token.address}\``;
+
+  const buttons = {
+    inline_keyboard: [
+      [
+        { text: '✅ Ape In', callback_data: `ape_${token.address}` },
+        { text: '❌ Skip', callback_data: `skip_${token.address}` }
+      ]
+    ]
+  };
+
+  await sendTelegram('sendMessage', {
+    chat_id: CHAT_ID,
+    text: message,
+    parse_mode: 'Markdown',
+    reply_markup: buttons
+  });
+}
+
+module.exports = { sendTokenAlert, queueScoredToken, flushTopAlerts, startAlertBatcher, handleUpdate, sendTradeNotification, sendUrgentAlert };

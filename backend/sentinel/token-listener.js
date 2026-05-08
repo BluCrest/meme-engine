@@ -3,7 +3,7 @@ const WebSocket = require('ws');
 const config = require('../config');
 const db = require('../database/db');
 const { computeFinalScore } = require('../strategist/score-engine');
-const { queueScoredToken } = require('../operator/telegram-bot');
+const { queueScoredToken, sendUrgentAlert } = require('../operator/telegram-bot');
 
 const PUMP_FUN_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
@@ -102,6 +102,9 @@ async function processNewToken(tokenAddress) {
 
     if (result.apeProbability >= 50) {
       const token = await db.getToken(tokenAddress);
+      if (result.apeProbability >= 75) {
+        await sendUrgentAlert(token, result);
+      }
       queueScoredToken(token, result);
     }
 
