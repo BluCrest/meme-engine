@@ -260,17 +260,19 @@ app.get('/cluster/:tokenAddress', async (req, res) => {
 
 // Register Telegram webhook so the bot can receive updates
 async function registerTelegramWebhook() {
-  const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
-  // Always start polling as reliable fallback
   const { startPolling } = require('./operator/telegram-bot');
   startPolling();
-  // Also register webhook if URL is configured (for real-time response)
+  // Auto-detect webhook URL from Render env or TELEGRAM_WEBHOOK_URL
+  const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL;
   if (!webhookUrl) {
+    console.log('[Telegram] No webhook URL available, polling only');
     try { await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/deleteWebhook`); } catch {}
     return;
   }
   try {
-    const url = `https://api.telegram.org/bot${config.telegram.botToken}/setWebhook?url=${encodeURIComponent(webhookUrl + '/telegram/callback')}`;
+    const fullUrl = webhookUrl.startsWith('http') ? webhookUrl + '/telegram/callback' : null;
+    if (!fullUrl) return;
+    const url = `https://api.telegram.org/bot${config.telegram.botToken}/setWebhook?url=${encodeURIComponent(fullUrl)}`;
     const res = await fetch(url);
     const data = await res.json();
     console.log('[Telegram] Webhook registered:', data.description || (data.ok ? 'OK' : 'FAILED'));
