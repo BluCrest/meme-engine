@@ -4,7 +4,7 @@ const bs58 = require('bs58');
 const config = require('../config');
 const db = require('../database/db');
 const { getCurrentPrice, getCurrentMC } = require('../utils/price-feed');
-const { getConnection } = require('../utils/rpc-rotator');
+const { executeWithFallback, getConnection } = require('../utils/rpc-rotator');
 
 const SOL_MINT = 'So11111111111111111111111111111111111112';
 
@@ -30,7 +30,7 @@ if (pk) {
 
 async function getBalance() {
   if (!walletKeypair) return 0;
-  const bal = await getConnection().getBalance(walletKeypair.publicKey);
+  const bal = await executeWithFallback(conn => conn.getBalance(walletKeypair.publicKey));
   return bal / LAMPORTS_PER_SOL;
 }
 
@@ -144,10 +144,11 @@ async function executeBuy(tokenAddr, mode, amountSol) {
       const buf = Buffer.from(swapRes.swapTransaction, 'base64');
       const tx = VersionedTransaction.deserialize(buf);
       tx.sign([walletKeypair]);
-      const conn = getConnection();
-      sig = await conn.sendTransaction(tx, { maxRetries: 3 });
-      const conf = await conn.confirmTransaction(sig, 'confirmed');
-      if (conf.value.err) throw new Error('TX failed: ' + JSON.stringify(conf.value.err));
+      await executeWithFallback(async conn => {
+        sig = await conn.sendTransaction(tx, { maxRetries: 3 });
+        const conf = await conn.confirmTransaction(sig, 'confirmed');
+        if (conf.value.err) throw new Error('TX failed: ' + JSON.stringify(conf.value.err));
+      });
       tokenAmt = parseInt(quote.outAmount) / 1e6;
       console.log(`[Executor] Jupiter buy: ${sig}`);
     }
@@ -226,7 +227,7 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     const ata = await getAssociatedTokenAddress(mintPubkey, walletKeypair.publicKey);
     let bal = 0;
     try {
-      const acc = await getAccount(getConnection(), ata, 'confirmed');
+      const acc = await executeWithFallback(conn => getAccount(conn, ata, 'confirmed'));
       bal = Number(acc.amount) / 1e6;
     } catch (e) {
       console.log('[Executor] No token account found for', tokenAddr, '— skipping sell');
@@ -242,9 +243,10 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       const buf = Buffer.from(swapRes.swapTransaction, 'base64');
       const tx = VersionedTransaction.deserialize(buf);
       tx.sign([walletKeypair]);
-      const conn = getConnection();
-      sig = await conn.sendTransaction(tx, { maxRetries: 3 });
-      await conn.confirmTransaction(sig, 'confirmed');
+      await executeWithFallback(async conn => {
+        sig = await conn.sendTransaction(tx, { maxRetries: 3 });
+        await conn.confirmTransaction(sig, 'confirmed');
+      });
       solVal = parseInt(quote.outAmount) / LAMPORTS_PER_SOL;
     } else {
       // Try Pump.fun sell

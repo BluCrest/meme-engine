@@ -1,4 +1,4 @@
-const { Connection, PublicKey } = require('@solana/web3.js');
+const { PublicKey } = require('@solana/web3.js');
 const { executeWithFallback } = require('../utils/rpc-rotator');
 const db = require('../database/db');
 
@@ -8,14 +8,13 @@ const SOL_THRESHOLD = 0.05;
 async function checkDevOutflow(devWallet, tokenAddress) {
   try {
     const pubkey = new PublicKey(devWallet);
-    const rpc = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com');
-    const sigs = await rpc.getSignaturesForAddress(pubkey, { limit: 10 });
+    const sigs = await executeWithFallback(conn => conn.getSignaturesForAddress(pubkey, { limit: 10 }));
     if (!sigs.length) return null;
 
-    const recentTxs = await rpc.getTransactions(
+    const recentTxs = await executeWithFallback(conn => conn.getTransactions(
       sigs.map(s => s.signature),
       { commitment: 'confirmed', maxSupportedTransactionVersion: 0 }
-    );
+    ));
 
     for (let i = 0; i < recentTxs.length; i++) {
       const tx = recentTxs[i];
