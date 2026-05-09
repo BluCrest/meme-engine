@@ -2,7 +2,7 @@ const config = require('../config');
 const db = require('../database/db');
 const { computeFinalScore } = require('../strategist/score-engine');
 const { queueScoredToken } = require('../operator/telegram-bot');
-const { fetchAllNewTokens, fetchSearchPairs, fetchPair } = require('../sources/source-rotator');
+const { fetchAllNewTokens } = require('../sources/source-rotator');
 
 // DEX Program IDs to monitor
 const DEX_PROGRAMS = {
@@ -21,74 +21,17 @@ async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Multi-source: token discovery from DexScreener + GMGN + Pump.fun
 async function scanDexScreener() {
   try {
-    // Pass 1: Fetch all new tokens from all sources
     const profiles = await fetchAllNewTokens();
-    // Pass 2: Search results for Solana tokens from DexScreener
-    const pairs = await fetchSearchPairs();
-    const mcByAddress = new Map();
-    const volByAddress = new Map();
-    if (pairs) {
-      for (const p of pairs) {
-        if (p.baseToken?.address) {
-          mcByAddress.set(p.baseToken.address, p.fdv || 0);
-          volByAddress.set(p.baseToken.address, p.volume?.h24 || 0);
-        }
-      }
-    }
-
-    // Merge both sources, deduplicate by address
     const candidates = [];
-    const seen = new Set();
 
-    // Collect from search results (already have MC + volume + creation time)
-    if (pairs) {
-      for (const pair of pairs) {
-        const addr = pair.baseToken?.address;
-        if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
-        if (seen.has(addr)) continue;
-        seen.add(addr);
-        const mc = pair.fdv || 0;
-        if (mc > 9000 || mc < 1000) continue;
-        const vol = pair.volume?.h24 || 0;
-        if (vol < 500) continue;
-        const priceChange = pair.priceChange?.h24 || 0;
-        if (priceChange < -80) continue;
-        const ageMin = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
-        candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc, volume: vol, dex: pair.dexId, age_min: ageMin });
-      }
-    }
+    for (const profile of (profiles || [])) {
+      const addr = profile.tokenAddress;
+      if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
 
-    // Collect from multi-source profiles (may need individual pair fetch)
-    if (Array.isArray(profiles)) {
-      for (const profile of profiles) {
-        const addr = profile.tokenAddress;
-        if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
-        if (seen.has(addr)) continue;
-        seen.add(addr);
+      const existing = await db.getToken(addr);
+      if (existing) continue;
 
-        if (mcByAddress.has(addr)) {
-          const mc = mcByAddress.get(addr);
-          if (mc > 9000 || mc < 1000) continue;
-          const vol = volByAddress.get(addr) || 0;
-          if (vol < 500) continue;
-          candidates.push({ addr, symbol: profile.symbol, name: profile.name, mc, volume: vol, dex: profile.dexId || 'unknown', age_min: 999 });
-        } else {
-          if (candidates.length > 30) continue;
-          await sleep(300);
-          try {
-            const pair = await fetchPair(addr);
-            if (!pair) continue;
-            const mc = pair.fdv || 0;
-            if (mc > 9000 || mc < 1000) continue;
-            const vol = pair.volume?.h24 || 0;
-            if (vol < 500) continue;
-            const priceChange = pair.priceChange?.h24 || 0;
-            if (priceChange < -80) continue;
-            const ageMin = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
-            candidates.push({ addr, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name, mc, volume: vol, dex: pair.dexId || 'unknown', age_min: ageMin });
-          } catch (_) { /* skip if fetch fails */ }
-        }
-      }
+      candidates.push({ addr, symbol: profile.symbol, name: profile.name, dex: profile.dexId || 'unknown' });
     }
 
     // Process all candidates
@@ -96,15 +39,12 @@ async function scanDexScreener() {
       const existing = await db.getToken(c.addr);
       if (existing) continue;
 
-      console.log(`[MultiDEX] New token: ${c.symbol || '?'} (${c.addr}) MC: $${c.mc} Vol: $${(c.volume || 0).toLocaleString()} Age: ${(c.age_min || 0).toFixed(1)}m`);
+      console.log(`[MultiDEX] New token: ${c.symbol || '?'} (${c.addr})`);
 
       await db.upsertToken({
         address: c.addr,
         symbol: c.symbol,
         name: c.name,
-        current_mc: c.mc,
-        volume_24h: c.volume || 0,
-        age_min: c.age_min || 999,
         status: 'new',
         created_at: new Date(),
         dex: c.dex

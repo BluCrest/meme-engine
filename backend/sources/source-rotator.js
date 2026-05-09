@@ -49,28 +49,25 @@ async function fetchDexVolume(tokenAddress) {
 async function fetchAllNewTokens() {
   const all = [];
   const seen = new Set();
-  for (const src of SOURCES) {
-    try {
-      let tokens;
-      if (src.fetchNewProfiles) tokens = await src.fetchNewProfiles();
-      else if (src.fetchNewTokens) tokens = await src.fetchNewTokens();
-      else continue;
-      for (const t of (tokens || [])) {
-        const addr = t.tokenAddress || t.address;
-        if (addr && !seen.has(addr)) {
-          seen.add(addr);
-          all.push(t);
-        }
-      }
-    } catch {}
+  // Pump.fun first — real new launches with addresses
+  const pumpTokens = await pumpFun.fetchNewTokens().catch(() => []);
+  for (const t of pumpTokens) {
+    const addr = t.tokenAddress;
+    if (addr && !seen.has(addr)) { seen.add(addr); all.push(t); }
+  }
+  // DexScreener profiles — supplements with graduated tokens
+  const dexProfiles = await dexScreener.fetchNewProfiles().catch(() => []);
+  for (const t of dexProfiles) {
+    const addr = t.tokenAddress;
+    if (addr && !seen.has(addr)) { seen.add(addr); all.push(t); }
+  }
+  // GMGN (may 403 on Render, but try anyway)
+  const gmgnTokens = await gmgn.fetchNewTokens().catch(() => []);
+  for (const t of gmgnTokens) {
+    const addr = t.tokenAddress || t.address;
+    if (addr && !seen.has(addr)) { seen.add(addr); all.push(t); }
   }
   return all;
-}
-
-async function fetchSearchPairs() {
-  try {
-    return await dexScreener.fetchSearchPairs();
-  } catch { return []; }
 }
 
 // Convert unified token data to DexScreener-compatible pair format
@@ -131,7 +128,7 @@ async function fetchName(tokenAddress) {
 
 module.exports = {
   fetchTokenData, fetchTokenPrice, fetchDexVolume,
-  fetchAllNewTokens, fetchSearchPairs,
+  fetchAllNewTokens,
   fetchPair, fetchPrice, fetchMC, fetchSymbol, fetchName,
   rotate, getCurrent, sources: SOURCES
 };

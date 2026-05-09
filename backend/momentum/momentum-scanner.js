@@ -1,4 +1,4 @@
-const { fetchDexVolume, fetchAllNewTokens, fetchSearchPairs } = require('../sources/source-rotator');
+const { fetchDexVolume, fetchAllNewTokens } = require('../sources/source-rotator');
 const copyTrader = require('../agents/copy-trader');
 const { isRecentlySold } = require('./momentum-trader');
 const { getNarrativeScore } = require('../detective/narrative-scanner');
@@ -148,41 +148,7 @@ async function scanMomentum() {
     });
   }
 
-  // PATH 2: Search API — finds active pairs already trading
-  const pairs = await fetchSearchPairs();
-  for (const pair of (pairs || []).slice(0, 10)) {
-    const addr = pair.baseToken?.address;
-    if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
-    if (isKnownNonMeme(addr)) continue;
-    if (seenTokens.has(addr)) continue;
-    if (isRecentlySold(addr)) continue;
-    seenTokens.set(addr, Date.now());
 
-    // Skip tokens older than 30 min — focus on fresh launches
-    const ageMin = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 0;
-    if (ageMin > 30) continue;
-
-    const mc = pair.fdv || 0;
-    if (mc > 9000) continue;
-    const volH1 = pair.volume?.h1 || 0;
-    if (volH1 < 50) continue;
-
-    const paprika = await fetchDexVolume(addr);
-    if (!paprika || paprika.txns5m < 2) continue;
-
-    // Check existing positions before triggering
-    const existingPos = [...require('./momentum-trader').activePositions.values()].find(p => p.tokenAddress === addr);
-    if (existingPos) continue;
-
-    const momentum = checkMomentum(addr, paprika);
-    if (momentum) {
-      triggers.push({
-        address: addr, symbol: pair.baseToken?.symbol || '?', name: pair.baseToken?.name || '',
-        momentum, paprika, copyTradeSignal: null, deployer: null, isSnipe: false,
-        narrativeMatch: getNarrativeScore(pair.baseToken?.symbol, pair.baseToken?.name)
-      });
-    }
-  }
 
   if (triggers.length) {
     const labels = triggers.map(t => `${t.symbol}(${t.momentum.trigger})`).join(', ');
