@@ -73,6 +73,7 @@ async function scanMomentum() {
   }
 
   const triggers = [];
+  let skippedNoData = 0, skippedZeroTxn = 0, skippedLowQuality = 0;
 
   // Clean expired zeroTxnCooldown entries
   for (const [addr, ts] of zeroTxnCooldown) {
@@ -81,6 +82,7 @@ async function scanMomentum() {
 
   // PATH 1: Multi-source token profiles — new launch detection for sniping
   const profiles = await fetchAllNewTokens();
+  console.log(`[Momentum] Scan: ${profiles ? profiles.length : 0} new profiles`);
   for (const profile of (profiles || []).slice(0, 50)) {
     const addr = profile.tokenAddress;
     if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
@@ -90,7 +92,7 @@ async function scanMomentum() {
 
     const deployer = profile.creator || null;
     const paprika = await fetchDexVolume(addr);
-    if (!paprika) continue;
+    if (!paprika) { skippedNoData++; continue; }
 
     // Resolve symbol: profile first, fallback to source data
     const resolvedSymbol = profile.symbol || paprika.symbol || '?';
@@ -106,6 +108,7 @@ async function scanMomentum() {
       } else {
         zeroTxnCooldown.set(addr, Date.now()); // first check — start 3 min re-check window
       }
+      skippedZeroTxn++;
       continue;
     }
 
@@ -130,6 +133,7 @@ async function scanMomentum() {
     const hasCopySignal = copyTradeSignal && copyTradeSignal.score > 15;
 
     if (!momentum && !hasRealActivity && !hasCopySignal) {
+      skippedLowQuality++;
       // Low quality — skip instead of blind sniping
       zeroTxnCooldown.set(addr, Date.now());
       continue;
@@ -153,6 +157,8 @@ async function scanMomentum() {
   if (triggers.length) {
     const labels = triggers.map(t => `${t.symbol}(${t.momentum.trigger})`).join(', ');
     console.log(`[Momentum] ${triggers.length} trigger(s): ${labels}`);
+  } else {
+    console.log(`[Momentum] Scan done: ${profiles ? profiles.length : 0} profiles → ${skippedNoData} no-data, ${skippedZeroTxn} zero-txn, ${skippedLowQuality} low-qual, ${triggers.length} triggers`);
   }
 
   return triggers;
