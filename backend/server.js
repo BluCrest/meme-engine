@@ -256,14 +256,27 @@ app.get('/cluster/:tokenAddress', async (req, res) => {
   }
 });
 
-// Register Telegram webhook — delete any existing one, use polling instead
+// Register Telegram connection — webhook on Render, polling locally
 async function registerTelegramWebhook() {
-  // Delete any existing webhook so getUpdates polling works
-  try {
-    await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/deleteWebhook`);
-    console.log('[Telegram] Webhook deleted, using polling');
-  } catch (e) {
-    console.error('[Telegram] Failed to delete webhook:', e.message);
+  if (process.env.RENDER === 'true') {
+    const webhookUrl = process.env.RENDER_EXTERNAL_URL
+      ? `https://${process.env.RENDER_EXTERNAL_URL}/telegram/callback`
+      : `${process.env.TELEGRAM_WEBHOOK_URL || ''}/telegram/callback`;
+    if (webhookUrl) {
+      try {
+        await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
+        console.log(`[Telegram] Webhook set to ${webhookUrl}`);
+      } catch (e) {
+        console.error('[Telegram] Webhook set failed:', e.message);
+      }
+    }
+  } else {
+    try {
+      await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/deleteWebhook`);
+      console.log('[Telegram] Webhook deleted, using polling');
+    } catch (e) {
+      console.error('[Telegram] Failed to delete webhook:', e.message);
+    }
   }
   const { startPolling } = require('./operator/telegram-bot');
   startPolling();

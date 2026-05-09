@@ -8,15 +8,18 @@ const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 // Poll getUpdates so commands work without a webhook URL
 let pollingOffset = 0;
 let pollingInterval;
+let pollingBackoff = 0;
 
 async function pollUpdates() {
+  if (pollingBackoff > Date.now()) return;
   try {
     const url = `${API_BASE}/getUpdates?offset=${pollingOffset}&timeout=5`;
     const res = await fetch(url);
     const data = await res.json();
     if (!data.ok) {
       if (data.error_code === 409) {
-        console.log('[TG Poll] 409 conflict — waiting 30s before retry');
+        pollingBackoff = Date.now() + 60000;
+        console.log('[TG Poll] 409 conflict — another instance is polling, retry in 60s');
         return;
       }
       console.log('[TG Poll] API error:', data);
@@ -41,8 +44,12 @@ async function pollUpdates() {
 
 function startPolling() {
   if (pollingInterval) return;
+  if (process.env.RENDER === 'true') {
+    console.log('[Telegram] Render env detected — using webhook mode, polling disabled');
+    return;
+  }
   pollingInterval = setInterval(pollUpdates, 3000);
-  setTimeout(pollUpdates, 2000); // wait 2s for webhook to be deleted
+  setTimeout(pollUpdates, 2000);
   console.log('[Telegram] Polling getUpdates every 3s for commands');
 }
 
