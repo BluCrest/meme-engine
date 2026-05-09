@@ -55,6 +55,7 @@ async function getExitParams(position) {
     trailingDrawdown: 0.12,
     stopLossPct: STOP_LOSS_PCT,
     timeoutMs: 900000,
+    pressureSellOnMedium: false,
   };
   try {
     const token = await db.getToken(position.token_address);
@@ -66,14 +67,30 @@ async function getExitParams(position) {
     const rep = dev.reputation_score || 50;
     const rugRate = dev.totalLaunches > 0 ? (dev.rugCount || 0) / dev.totalLaunches : 0;
     const avgPeak = dev.avg_return_at_peak || 1;
+    const entryPrice = position.entry_price || 1;
+    const currentPrice = await getCurrentPrice(position.token_address).catch(() => 0);
+    const currentReturn = currentPrice > 0 ? currentPrice / entryPrice : 0;
+    const hoursHeld = position.opened_at ? (Date.now() - new Date(position.opened_at).getTime()) / 3600000 : 0;
+
+    // Proximity check: if current return is near dev's avg peak return
+    const proximityToPeak = avgPeak > 1 && currentReturn > 0 ? currentReturn / avgPeak : 0;
+    const proximityToRugTime = dev.avg_time_to_rug_hours > 0 && hoursHeld > 0 ? hoursHeld / dev.avg_time_to_rug_hours : 0;
+    const nearPeak = proximityToPeak > 0.7;
+    const nearRugTime = proximityToRugTime > 0.7;
+    const nearExit = nearPeak || nearRugTime;
+
     if (rep > 70 && rugRate < 0.3) {
       params.trailingDrawdown = Math.min(0.25, 0.12 + (rep - 70) / 200);
       params.trailingTrigger = Math.min(5, Math.max(0.2, avgPeak * 0.4));
       params.stopLossPct = -0.25;
+      if (nearExit) params.pressureSellOnMedium = true;
     } else if (rugRate > 0.7 || rep < 30) {
       params.trailingDrawdown = 0.08;
       params.trailingTrigger = 0.15;
       params.stopLossPct = -0.15;
+      if (nearExit) params.pressureSellOnMedium = true;
+    } else {
+      if (nearExit) params.pressureSellOnMedium = true;
     }
     if (dev.avg_time_to_rug_hours && dev.avg_time_to_rug_hours > 0) {
       params.timeoutMs = Math.min(3600000, dev.avg_time_to_rug_hours * 0.75 * 3600000);
@@ -82,10 +99,10 @@ async function getExitParams(position) {
   return params;
 }
 
-async function trailingStopCheck(position, currentPrice) {
+async function trailingStopCheck(position, currentPrice, ep) {
   const entryPrice = position.entry_price || 1;
   const pnl = (currentPrice / entryPrice) - 1;
-  const ep = await getExitParams(position);
+  if (!ep) ep = await getExitParams(position);
   if (pnl < ep.trailingTrigger) return null;
   const peakPrice = position.highest_price || currentPrice;
   const drawdownFromPeak = (peakPrice - currentPrice) / peakPrice;
@@ -107,10 +124,10 @@ async function momentumDivergenceExit(tokenAddress, position, currentPrice) {
   return null;
 }
 
-async function stopLossCheck(position, currentPrice) {
+async function stopLossCheck(position, currentPrice, ep) {
   const entryPrice = position.entry_price || 1;
   const pnl = (currentPrice / entryPrice) - 1;
-  const ep = await getExitParams(position);
+  if (!ep) ep = await getExitParams(position);
   if (pnl <= ep.stopLossPct) {
     return { triggered: true, reason: 'stop_loss', pnl, message: `🛑 *STOP-LOSS HIT* — PnL: ${(pnl * 100).toFixed(0)}% (${formatX(pnl)}) at ${currentPrice.toFixed(6)}` };
   }
@@ -134,8 +151,10 @@ async function processExitsForPosition(position) {
       await db.updateHighestPrice(position._id, currentPrice);
     }
 
+    const ep = await getExitParams(position);
+
     // 0. Stop-loss (highest priority — protect capital)
-    const sl = await stopLossCheck(position, currentPrice);
+    const sl = await stopLossCheck(position, currentPrice, ep);
     if (sl) {
       await executeSell(position.token_address, 1.0, sl.reason);
       await sendTelegramMessage(chatId, sl.message);
@@ -179,11 +198,18 @@ async function processExitsForPosition(position) {
       }
       const high = pressureSignals.find(s => s.severity === 'high');
       if (high) {
-        await executeSell(position.token_address, 0.5, high.reason);
+        const ratio = ep.pressureSellOnMedium ? 1.0 : 0.5;
+        await executeSell(position.token_address, ratio, high.reason);
         await sendTelegramMessage(chatId, high.message);
+        if (ep.pressureSellOnMedium) return;
       }
       const medium = pressureSignals.find(s => s.severity === 'medium' && s.triggered);
       if (medium && !high && !critical) {
+        if (ep.pressureSellOnMedium) {
+          await executeSell(position.token_address, 0.5, medium.reason);
+          await sendTelegramMessage(chatId, `⚡ *EARLY EXIT (near dev peak)* — ${medium.message}`);
+          return;
+        }
         await sendTelegramMessage(chatId, medium.message + ' — monitoring');
       }
     }
@@ -215,8 +241,10 @@ async function processExitsForPosition(position) {
     // 6. Momentum Divergence Exit
     const divergenceExit = await momentumDivergenceExit(position.token_address, position, currentPrice);
     if (divergenceExit) {
-      await executeSell(position.token_address, 0.5, divergenceExit.reason);
+      const ratio = ep.pressureSellOnMedium ? 1.0 : 0.5;
+      await executeSell(position.token_address, ratio, divergenceExit.reason);
       await sendTelegramMessage(chatId, divergenceExit.message);
+      if (ep.pressureSellOnMedium) return;
     }
 
     // 7. Exit Rules (scaling sells) — partial, continue checking other risks
@@ -228,7 +256,7 @@ async function processExitsForPosition(position) {
     }
 
     // 8. Trailing Stop
-    const trailing = await trailingStopCheck(position, currentPrice);
+    const trailing = await trailingStopCheck(position, currentPrice, ep);
     if (trailing) {
       await executeSell(position.token_address, 1.0, trailing.reason);
       await sendTelegramMessage(chatId, trailing.message);
