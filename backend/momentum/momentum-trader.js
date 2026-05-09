@@ -2,14 +2,15 @@ const db = require('../database/db');
 const config = require('../config');
 const copyTrader = require('../agents/copy-trader');
 
-const MONITOR_INTERVAL = 10000; // check every 10s
+const MONITOR_INTERVAL = 10000;
 const TAKE_PROFIT = 1.5;
 const STOP_LOSS = -0.30;
 const TRAILING_PCT = 0.12;
-const MAX_POSITIONS = 4;
-const MAX_SNIPE_POSITIONS = 1; // Only 1 snipe at a time — sell before next
+const MAX_POSITIONS = 3;
+const MAX_SNIPE_POSITIONS = 1;
 const MIN_BUY = 0.002;
-const MIN_BALANCE_FLOOR = 0.01; // Stop ALL buying if balance below this
+const MIN_BALANCE_FLOOR = 0.01;
+const MAX_BUYS_PER_HOUR = 4;
 
 const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
@@ -17,6 +18,39 @@ const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 let activePositions = new Map();
 const snipePending = new Set();
+
+// Performance tracker per trigger type — learn from wins/losses
+const triggerStats = new Map(); // triggerType -> { wins, losses, total }
+
+function recordTriggerResult(triggerType, pnlPct) {
+  if (!triggerType) return;
+  if (!triggerStats.has(triggerType)) triggerStats.set(triggerType, { wins: 0, losses: 0, total: 0 });
+  const s = triggerStats.get(triggerType);
+  s.total++;
+  if (pnlPct > 0) s.wins++;
+  else s.losses++;
+}
+
+function shouldSkipTrigger(triggerType) {
+  const s = triggerStats.get(triggerType);
+  if (!s || s.total < 3) return false;
+  return s.losses / s.total > 0.75;
+}
+
+// Buy cooldown: limit buys per rolling hour
+const buyTimestamps = [];
+
+function canBuy() {
+  const now = Date.now();
+  const recent = buyTimestamps.filter(t => now - t < 3600000);
+  buyTimestamps.length = 0;
+  buyTimestamps.push(...recent);
+  return buyTimestamps.length < MAX_BUYS_PER_HOUR;
+}
+
+function recordBuy() {
+  buyTimestamps.push(Date.now());
+}
 
 async function sendTelegramMessage(text) {
   try {
@@ -78,6 +112,7 @@ async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerTyp
         isPaperTrading,
       };
       activePositions.set(tokenAddress, position);
+      recordBuy();
       const label = triggerType === 'snipe' ? '🎯 SNIPE' : triggerType === 'copy_trade' ? '👥 COPY' : '⚡ MOMENTUM';
       console.log(`[Momentum] ${symbol}: BOUGHT ${solAmount.toFixed(4)} SOL @ $${entryPrice} (${triggerType})`);
       await sendTelegramMessage(`${label} *$${symbol}* — ${solAmount.toFixed(4)} SOL | Trigger: ${triggerType} | CA: \`${tokenAddress}\``);
@@ -102,6 +137,7 @@ async function executeMomentumSell(tokenAddress, reason) {
       const emoji = pnl > 0 ? '✅' : '❌';
       console.log(`[Momentum] ${pos.symbol}: SOLD (${reason}) PnL: ${pnl.toFixed(1)}%`);
       await sendTelegramMessage(`${emoji} *$${pos.symbol}* sold — ${pnl > 0 ? '+' : ''}${pnl.toFixed(1)}% (${(1 + pnl/100).toFixed(2)}x) | ${reason} | Invested: ${pos.solInvested.toFixed(4)} SOL`);
+      recordTriggerResult(pos.trigger, pnl / 100);
     } else {
       console.log(`[Momentum] ${pos.symbol}: sell skipped/failed (${reason}) — removing from active positions`);
     }
@@ -124,8 +160,23 @@ async function checkPosition(tokenAddress) {
 
   copyTrader.recordPrice(tokenAddress, currentPrice);
 
-  // Paper mode: only timeout sell (30 min), no stop-loss
+  // Paper mode: check exits same as live (take profit, stop loss, timeout)
   if (pos.isPaperTrading) {
+    if (pnlPct >= TAKE_PROFIT) {
+      await executeMomentumSell(tokenAddress, `paper_target_${(TAKE_PROFIT * 100).toFixed(0)}x`);
+      return;
+    }
+    if (pos.peakPrice > pos.entryPrice * 1.05) {
+      const trailDrop = (pos.peakPrice - currentPrice) / pos.peakPrice;
+      if (trailDrop >= TRAILING_PCT) {
+        await executeMomentumSell(tokenAddress, `paper_trail_${(TRAILING_PCT * 100).toFixed(0)}pct`);
+        return;
+      }
+    }
+    if (pnlPct <= STOP_LOSS) {
+      await executeMomentumSell(tokenAddress, `paper_stop_${(STOP_LOSS * 100).toFixed(0)}pct`);
+      return;
+    }
     if (Date.now() - pos.boughtAt > 1800000) {
       await executeMomentumSell(tokenAddress, 'paper_timeout_30m');
       return;
@@ -183,6 +234,18 @@ async function sellSnipePositionsBeforeNewBuy() {
 }
 
 async function handleMomentumTrigger(trigger) {
+  // Skip if this trigger type has >75% loss rate (learned from past results)
+  if (shouldSkipTrigger(trigger.momentum?.trigger)) {
+    console.log(`[Momentum] ${trigger.symbol}: trigger "${trigger.momentum.trigger}" has poor track record — skipping`);
+    return;
+  }
+
+  // Rate limit buys: max 4 per hour
+  if (!canBuy()) {
+    console.log(`[Momentum] Buy rate limit hit (${MAX_BUYS_PER_HOUR}/hr) — skipping ${trigger.symbol}`);
+    return;
+  }
+
   // Balance floor: don't even try if balance is critically low (skip check in paper trading)
   const currentBal = await getBalance();
   const isPaperTrading = await db.getPaperTrading();
