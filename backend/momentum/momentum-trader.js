@@ -187,6 +187,11 @@ async function checkPosition(tokenAddress) {
           stopLoss = Math.max(-0.20, -0.15 * (1 / tightenFactor));
         } else {
           trailPct = Math.min(0.15, 0.12 * tightenFactor);
+          trailTrigger = 0.15;
+        }
+        // Momentum buys: token already pumped before entry, arm trailing sooner
+        if (pos.trigger) {
+          trailTrigger = Math.min(trailTrigger, 0.1);
         }
         if (dev.avg_time_to_rug_hours && dev.avg_time_to_rug_hours > 0) {
           timeoutMs = Math.min(3600000, dev.avg_time_to_rug_hours * 0.75 * 3600000);

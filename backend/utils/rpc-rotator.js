@@ -4,7 +4,10 @@ const config = require('../config');
 const PUBLIC_ENDPOINTS = [
   'https://api.mainnet-beta.solana.com',
   'https://solana-api.projectserum.com',
-  'https://rpc.ankr.com/solana'
+  'https://rpc.ankr.com/solana',
+  'https://solana.publicnode.com',
+  'https://free.rpcpool.com',
+  'https://api.metaplex.solana.com'
 ];
 
 const connections = [];

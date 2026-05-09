@@ -95,10 +95,15 @@ async function getExitParams(position) {
       if (nearExit) params.pressureSellOnMedium = true;
     } else {
       params.trailingDrawdown = Math.min(0.15, 0.12 * tightenFactor);
+      params.trailingTrigger = 0.15;
       if (nearExit) params.pressureSellOnMedium = true;
     }
     if (dev.avg_time_to_rug_hours && dev.avg_time_to_rug_hours > 0) {
       params.timeoutMs = Math.min(3600000, dev.avg_time_to_rug_hours * 0.75 * 3600000);
+    }
+    // Momentum buys: token already pumped before entry, arm trailing sooner
+    if (position.triggered_by === 'momentum') {
+      params.trailingTrigger = Math.min(params.trailingTrigger, 0.1);
     }
   } catch (_) {}
   return params;
