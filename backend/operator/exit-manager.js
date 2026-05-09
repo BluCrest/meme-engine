@@ -187,13 +187,12 @@ async function processExitsForPosition(position) {
       await sendTelegramMessage(chatId, divergenceExit.message);
     }
 
-    // 7. Exit Rules (scaling sells)
+    // 7. Exit Rules (scaling sells) — partial, continue checking other risks
     const exitRule = await checkExitRules(position, currentPrice);
     if (exitRule) {
       await executeSell(position.token_address, exitRule.rule.sellRatio, `exit_rule_${exitRule.rule.pnlThreshold}`);
       await db.markExitTierHit(position._id, exitRule.rule.pnlThreshold);
       await sendTelegramMessage(chatId, `${exitRule.message}`);
-      return;
     }
 
     // 8. Trailing Stop

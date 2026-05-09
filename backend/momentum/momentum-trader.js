@@ -246,6 +246,38 @@ async function handleMomentumTrigger(trigger) {
     return;
   }
 
+  // Pre-buy dev validation — check dev profile before buying
+  try {
+    const token = await db.getToken(trigger.address);
+    const devWallet = token?.dev_wallet;
+    if (devWallet) {
+      const { buildDevProfile } = require('../profiler/dev-fingerprint');
+      const devProfile = await buildDevProfile(devWallet);
+      if (devProfile?.label === 'serial_rugger') {
+        console.log(`[Momentum] ${trigger.symbol}: dev is serial_rugger — skipping`);
+        return;
+      }
+      if (devProfile && (devProfile.rugCount || 0) >= 3) {
+        console.log(`[Momentum] ${trigger.symbol}: dev has ${devProfile.rugCount} rugs — skipping`);
+        return;
+      }
+    }
+  } catch (_) {}
+
+  // Quick safety check — skip clear honeypots
+  try {
+    const { runSafetyCheck } = require('../sentinel/safety-checker');
+    const safety = await runSafetyCheck(trigger.address);
+    if (safety?.honeypot) {
+      console.log(`[Momentum] ${trigger.symbol}: honeypot detected — skipping`);
+      return;
+    }
+    if (safety && (safety.top5Concentration || 0) > 80) {
+      console.log(`[Momentum] ${trigger.symbol}: top 5 hold ${safety.top5Concentration}% — skipping`);
+      return;
+    }
+  } catch (_) {}
+
   // Balance floor: don't even try if balance is critically low (skip check in paper trading)
   const currentBal = await getBalance();
   const isPaperTrading = await db.getPaperTrading();
