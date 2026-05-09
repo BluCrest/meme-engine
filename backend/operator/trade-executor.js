@@ -208,6 +208,17 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       status: 'open'
     });
     if (!pos) throw new Error('No open position');
+
+    let sig, solVal, sellAmt;
+
+    // Paper trading: skip real swap execution and ATA lookup
+    if (await db.getPaperTrading()) {
+      sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      sellAmt = (pos.sol_invested || 0.01) / (pos.entry_price || 0.0001) * sellRatio;
+      const entryPrice = pos.entry_price || 0.0001;
+      solVal = sellAmt * entryPrice * 0.95;
+      console.log(`[Executor] PAPER sell: ${sellAmt.toFixed(2)} tokens @ $${entryPrice} → ${solVal.toFixed(6)} SOL (sig: ${sig})`);
+    } else {
     const ata = await getAssociatedTokenAddress(mintPubkey, walletKeypair.publicKey);
     let bal = 0;
     try {
@@ -217,18 +228,10 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       console.log('[Executor] No token account found for', tokenAddr, '— skipping sell');
       return { success: false, error: 'No token balance' };
     }
-    const sellAmt = bal * sellRatio;
+    sellAmt = bal * sellRatio;
     if (sellAmt <= 0) throw new Error('Nothing to sell');
     const sellLamports = Math.floor(sellAmt * 1e6);
-    let sig, solVal;
 
-    // Paper trading: skip real swap execution
-    if (await db.getPaperTrading()) {
-      sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      const entryPrice = pos.entry_price || 0.0001;
-      solVal = sellAmt * entryPrice;
-      console.log(`[Executor] PAPER sell: ${sellAmt} tokens @ $${entryPrice} → ${solVal.toFixed(6)} SOL (sig: ${sig})`);
-    } else {
     const quote = await getJupiterQuote(tokenAddr, SOL_MINT, sellLamports, 500);
     if (quote && !quote.error) {
       const swapRes = await executeJupiterSwap(quote, walletKeypair.publicKey);
