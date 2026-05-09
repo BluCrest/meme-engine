@@ -75,6 +75,7 @@ async function registerCommands() {
         { command: 'papertrading', description: 'Toggle paper trading on/off' },
         { command: 'report', description: 'Per-token P&L breakdown' },
         { command: 'resume', description: 'Clear circuit breaker, resume buys' },
+        { command: 'learn', description: 'Learning stats & weights' },
         { command: 'help', description: 'All commands' },
       ]
     });
@@ -511,6 +512,10 @@ Use /portfolio for balance, /positions for open trades`;
       perToken.push({ addr, symbol, totalInvested, totalReturned, pnl, pnlPct });
     }
     perToken.sort((a, b) => b.pnlPct - a.pnlPct);
+    if (!perToken.length) {
+      await sendTelegram('sendMessage', { chat_id: chatId, text: '📋 *Per-Token P&L*\n━━━━━━━━━━━━━━━━━━━━\n\nNo closed positions yet. Trades appear here after selling.' });
+      return;
+    }
     let msg = '📋 *Per-Token P&L*\n━━━━━━━━━━━━━━━━━━━━\n\n';
     let winners = 0, losers = 0;
     for (const t of perToken) {
