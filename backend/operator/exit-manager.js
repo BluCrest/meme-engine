@@ -112,8 +112,24 @@ async function trailingStopCheck(position, currentPrice, ep) {
   const peakPrice = position.highest_price || currentPrice;
   const drawdownFromPeak = (peakPrice - currentPrice) / peakPrice;
   if (drawdownFromPeak >= ep.trailingDrawdown) {
+    // Velocity: if the drop happened fast, it's a rug — sell immediately
+    const peakTime = position.peak_reached_at ? new Date(position.peak_reached_at).getTime() : 0;
+    const secondsSincePeak = peakTime > 0 ? (Date.now() - peakTime) / 1000 : 999;
+    const isFlashCrash = secondsSincePeak < 60 && drawdownFromPeak >= ep.trailingDrawdown * 0.6;
+    if (isFlashCrash) {
+      return { triggered: true, reason: 'flash_crash', message: `💥 *FLASH CRASH* — ${(drawdownFromPeak * 100).toFixed(0)}% drop in ${secondsSincePeak.toFixed(0)}s` };
+    }
     const label = ep.trailingDrawdown >= 0.2 ? 'loose' : ep.trailingDrawdown <= 0.08 ? 'tight' : 'normal';
     return { triggered: true, reason: 'trailing_stop', message: `🛑 *TRAILING STOP (${label})* — Drawdown: ${(drawdownFromPeak * 100).toFixed(0)}% from peak` };
+  }
+  // Track when peak was reached for velocity detection
+  if (currentPrice > peakPrice * 0.98) {
+    try {
+      await db.getDb().collection('positions').updateOne(
+        { _id: position._id },
+        { $set: { peak_reached_at: new Date() } }
+      );
+    } catch (_) {}
   }
   return null;
 }
@@ -176,23 +192,20 @@ async function processExitsForPosition(position) {
       return;
     }
 
-    // 2. Sell target from auto-buy — partial take-profit
-    if (position.sell_target_multiplier && position.entry_price > 0) {
-      const targetPrice = position.entry_price * position.sell_target_multiplier;
-      if (currentPrice >= targetPrice && !position.sell_target_taken) {
-        const isMoonshot = (position.moonshot_probability || 0) > 50;
-        const sellRatio = isMoonshot ? 0.2 : 0.33;
-        await executeSell(position.token_address, sellRatio, 'sell_target_partial');
-        await db.getDb().collection('positions').updateOne(
-          { _id: position._id },
-          { $set: { sell_target_taken: true } }
-        );
-        const label = isMoonshot ? '🌙 Moonshot' : '🎯 Take-profit';
-        await sendTelegramMessage(chatId, `${label} — Sold ${(sellRatio * 100).toFixed(0)}% at ${position.sell_target_multiplier.toFixed(2)}x, rest riding`);
+    // 2. Dev wallet outflow: if dev moves SOL or removes LP during position, rug signal
+    try {
+      if (devWallet) {
+        const { checkDevOutflow } = require('../sentinel/dev-outflow-monitor');
+        const devOutflow = await checkDevOutflow(devWallet, position.token_address);
+        if (devOutflow && devOutflow.triggered) {
+          await executeSell(position.token_address, 1.0, devOutflow.reason);
+          await sendTelegramMessage(chatId, devOutflow.message);
+          return;
+        }
       }
-    }
+    } catch (_) {}
 
-    // 3. Onchain sell pressure (DexScreener + DexPaprika buy/sell ratios)
+    // 3. Onchain sell pressure — always sell 100% in sniper mode
     const pressureSignals = await checkTokenSellPressure(position.token_address);
     if (pressureSignals) {
       const critical = pressureSignals.find(s => s.severity === 'critical');
@@ -203,15 +216,14 @@ async function processExitsForPosition(position) {
       }
       const high = pressureSignals.find(s => s.severity === 'high');
       if (high) {
-        const ratio = ep.pressureSellOnMedium ? 1.0 : 0.5;
-        await executeSell(position.token_address, ratio, high.reason);
+        await executeSell(position.token_address, 1.0, high.reason);
         await sendTelegramMessage(chatId, high.message);
-        if (ep.pressureSellOnMedium) return;
+        return;
       }
       const medium = pressureSignals.find(s => s.severity === 'medium' && s.triggered);
       if (medium && !high && !critical) {
         if (ep.pressureSellOnMedium) {
-          await executeSell(position.token_address, 0.5, medium.reason);
+          await executeSell(position.token_address, 1.0, medium.reason);
           await sendTelegramMessage(chatId, `⚡ *EARLY EXIT (near dev peak)* — ${medium.message}`);
           return;
         }
@@ -243,13 +255,12 @@ async function processExitsForPosition(position) {
       } catch (_) {}
     }
 
-    // 6. Momentum Divergence Exit
+    // 6. Momentum Divergence Exit — sell 100%, divergence is a strong dump signal
     const divergenceExit = await momentumDivergenceExit(position.token_address, position, currentPrice);
     if (divergenceExit) {
-      const ratio = ep.pressureSellOnMedium ? 1.0 : 0.5;
-      await executeSell(position.token_address, ratio, divergenceExit.reason);
+      await executeSell(position.token_address, 1.0, divergenceExit.reason);
       await sendTelegramMessage(chatId, divergenceExit.message);
-      if (ep.pressureSellOnMedium) return;
+      return;
     }
 
     // 7. Exit Rules (scaling sells) — partial, continue checking other risks

@@ -175,14 +175,18 @@ async function checkPosition(tokenAddress) {
         const rep = dev.reputation_score || 50;
         const rugRate = dev.totalLaunches > 0 ? (dev.rugCount || 0) / dev.totalLaunches : 0;
         const avgPeak = dev.avg_return_at_peak || 1;
+        const patternMemory = require('../agents/pattern-memory');
+        const tightenFactor = patternMemory.getTighteningFactor();
         if (rep > 70 && rugRate < 0.3) {
-          trailPct = Math.min(0.25, 0.12 + (rep - 70) / 200);
+          trailPct = Math.min(0.25, 0.12 + (rep - 70) / 200) * (1 / tightenFactor);
           trailTrigger = Math.min(5, Math.max(0.2, avgPeak * 0.4));
-          stopLoss = -0.25;
+          stopLoss = Math.max(-0.30, -0.25 * (1 / tightenFactor));
         } else if (rugRate > 0.7 || rep < 30) {
-          trailPct = 0.08;
+          trailPct = Math.min(0.15, 0.08 * tightenFactor);
           trailTrigger = 0.15;
-          stopLoss = -0.15;
+          stopLoss = Math.max(-0.20, -0.15 * (1 / tightenFactor));
+        } else {
+          trailPct = Math.min(0.15, 0.12 * tightenFactor);
         }
         if (dev.avg_time_to_rug_hours && dev.avg_time_to_rug_hours > 0) {
           timeoutMs = Math.min(3600000, dev.avg_time_to_rug_hours * 0.75 * 3600000);
@@ -196,10 +200,16 @@ async function checkPosition(tokenAddress) {
     if (pos.peakPrice > pos.entryPrice * (1 + trailTrigger)) {
       const trailDrop = (pos.peakPrice - currentPrice) / pos.peakPrice;
       if (trailDrop >= trailPct) {
+        const secondsSincePeak = pos.peakReachedAt ? (Date.now() - pos.peakReachedAt) / 1000 : 999;
+        if (secondsSincePeak < 60 && trailDrop >= trailPct * 0.6) {
+          await executeMomentumSell(tokenAddress, 'paper_flash_crash');
+          return;
+        }
         await executeMomentumSell(tokenAddress, `paper_trail_${(trailPct * 100).toFixed(0)}pct`);
         return;
       }
     }
+    if (currentPrice > pos.peakPrice * 0.98) pos.peakReachedAt = Date.now();
     if (pnlPct <= stopLoss) {
       await executeMomentumSell(tokenAddress, `paper_stop_${(stopLoss * 100).toFixed(0)}pct`);
       return;
@@ -211,14 +221,21 @@ async function checkPosition(tokenAddress) {
     return;
   }
 
-  // Live — trailing stop
+  // Live — trailing stop with flash crash detection
   if (pos.peakPrice > pos.entryPrice * (1 + trailTrigger)) {
     const trailDrop = (pos.peakPrice - currentPrice) / pos.peakPrice;
     if (trailDrop >= trailPct) {
+      const secondsSincePeak = pos.peakReachedAt ? (Date.now() - pos.peakReachedAt) / 1000 : 999;
+      if (secondsSincePeak < 60 && trailDrop >= trailPct * 0.6) {
+        await executeMomentumSell(tokenAddress, 'flash_crash');
+        return;
+      }
       await executeMomentumSell(tokenAddress, `trail_${(trailPct * 100).toFixed(0)}pct`);
       return;
     }
   }
+  // Track peak timestamp for velocity detection
+  if (currentPrice > pos.peakPrice * 0.98) pos.peakReachedAt = Date.now();
   // Hard stop
   if (pnlPct <= stopLoss) {
     await executeMomentumSell(tokenAddress, `stop_${(stopLoss * 100).toFixed(0)}pct`);
