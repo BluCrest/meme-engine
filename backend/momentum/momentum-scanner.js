@@ -1,5 +1,4 @@
-const { fetchWithRetry } = require('../utils/http-client');
-const { waitForToken } = require('../utils/rate-limiter');
+const { fetchDexVolume, fetchAllNewTokens, fetchSearchPairs } = require('../sources/source-rotator');
 const copyTrader = require('../agents/copy-trader');
 
 const SCAN_INTERVAL = 15000; // 15s for near-instant sniping
@@ -25,43 +24,6 @@ function isKnownNonMeme(addr) { return KNOWN_NON_MEME.has(addr); }
 const SEEN_TTL = 600000; // 10 min — don't re-trigger same token within 10 min
 let seenClearedAt = Date.now();
 const SEEN_CLEAN_INTERVAL = 60000; // clean stale entries every 60s
-
-async function fetchDexVolume(tokenAddress) {
-  try {
-    await waitForToken('dexscreener', 15, 1000);
-    const res = await fetchWithRetry(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, { timeout: 6000 });
-    if (!res || !res.ok) return null;
-    const data = await res.json();
-    const pair = data.pairs?.[0];
-    if (!pair) return null;
-    return {
-      vol5m: pair.volume?.m5 || 0,
-      buys5m: pair.txns?.m5?.buys || 0,
-      sells5m: pair.txns?.m5?.sells || 0,
-      txns5m: (pair.txns?.m5?.buys || 0) + (pair.txns?.m5?.sells || 0),
-      vol1h: pair.volume?.h1 || 0,
-      symbol: pair.baseToken?.symbol || null,
-      baseToken: pair.baseToken?.name || null
-    };
-  } catch (_) { return null; }
-}
-
-async function fetchTokenProfiles() {
-  try {
-    const res = await fetchWithRetry('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 8000, retryDelay: 2000 });
-    if (!res || !res.ok) return [];
-    return await res.json();
-  } catch (_) { return []; }
-}
-
-async function fetchSearchPairs() {
-  try {
-    const res = await fetchWithRetry('https://api.dexscreener.com/latest/dex/search?q=solana', { timeout: 8000, retryDelay: 2000 });
-    if (!res || !res.ok) return [];
-    const data = await res.json();
-    return data.pairs || [];
-  } catch (_) { return []; }
-}
 
 // Minimum thresholds for sniping (blind buys)
 const MIN_SNIPE_TXNS = 3;       // at least 3 transactions in 5m
@@ -115,8 +77,8 @@ async function scanMomentum() {
     if (Date.now() - ts > 60000) zeroTxnCooldown.delete(addr);
   }
 
-  // PATH 1: Token profiles — new launch detection for sniping
-  const profiles = await fetchTokenProfiles();
+  // PATH 1: Multi-source token profiles — new launch detection for sniping
+  const profiles = await fetchAllNewTokens();
   for (const profile of (profiles || []).slice(0, 50)) {
     const addr = profile.tokenAddress;
     if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
@@ -124,11 +86,11 @@ async function scanMomentum() {
     if (seenTokens.has(addr)) continue;
     if (zeroTxnCooldown.has(addr)) continue;
 
-    const deployer = profile.creator?.address || null;
+    const deployer = profile.creator || null;
     const paprika = await fetchDexVolume(addr);
     if (!paprika) continue;
 
-    // Resolve symbol: profile first, fallback to DexScreener pair data
+    // Resolve symbol: profile first, fallback to source data
     const resolvedSymbol = profile.symbol || paprika.symbol || '?';
     const resolvedName = profile.name || paprika.baseToken || '';
 
