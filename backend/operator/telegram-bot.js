@@ -61,6 +61,8 @@ async function registerCommands() {
         { command: 'copywallets', description: 'Top tracked wallets' },
         { command: 'pnl', description: 'P&L summary' },
         { command: 'trades', description: 'Recent trades' },
+        { command: 'buy', description: 'Buy token: /buy <address> [sol]' },
+        { command: 'sell', description: 'Sell position: /sell <address> [ratio]' },
         { command: 'papertrading', description: 'Toggle paper trading on/off' },
         { command: 'resume', description: 'Clear circuit breaker, resume buys' },
         { command: 'help', description: 'All commands' },
@@ -353,7 +355,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\n⚡ Momentum sniping active — scans for volume spikes every 60s, auto-buys on buy pressure. Legacy scoring still running for quality plays.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/momentum - Active momentum trades\n/pnl - P&L summary\n/trades - Recent trades\n/help - All commands',
+      text: '🚀 *Meme Engine Active!*\n\n⚡ Momentum sniping active — scans for volume spikes every 60s, auto-buys on buy pressure. Legacy scoring still running for quality plays.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/momentum - Active momentum trades\n/pnl - P&L summary\n/trades - Recent trades\n/buy <addr> - Buy a token\n/sell <addr> - Sell a position\n/help - All commands',
       parse_mode: 'Markdown'
     });
   }
@@ -382,8 +384,9 @@ async function handleUpdate(update) {
       const currentPrice = await require('../utils/price-feed').getCurrentPrice(addr);
       const pnl = p.entry_price > 0 ? ((currentPrice / p.entry_price) - 1) * 100 : 0;
       const ticker = p.symbol || addr.slice(0, 8);
-      msg += `$${ticker} — ${pnl.toFixed(1)}%\n   Entry: $${p.entry_price?.toFixed(8)} | Now: $${currentPrice?.toFixed(8)}\n`;
+      msg += `$${ticker} — ${pnl.toFixed(1)}%\n   \`${addr}\`\n`;
     }
+    msg += `\nUse /sell \\\`address\\\` [ratio] to sell a position\nExample: /sell \\\`${(positions[0]?.token_address || 'address').slice(0, 8)}...\\\` 0.5`;
     await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
   }
 
@@ -496,6 +499,8 @@ Use /portfolio for balance, /positions for open trades`;
 /copywallets - Top tracked profitable wallets
 /pnl - P&L summary
 /trades - Recent trade history
+/buy <address> [sol] - Buy a token
+/sell <address> [ratio] - Sell a position (1.0=100%)
 /papertrading [on|off] - Toggle paper trading mode (no real tx)
 /resume - Clear circuit breaker, resume new buys
 /help - This message
@@ -521,6 +526,54 @@ Circuit breaker: pauses new buys after 3 consecutive losses or daily loss limit.
     } else {
       const current = await getPaperTrading();
       await sendTelegram('sendMessage', { chat_id: chatId, text: `📝 Paper trading is currently *${current ? 'ON' : 'OFF'}*\n\nUse /papertrading on or /papertrading off to toggle.`, parse_mode: 'Markdown' });
+    }
+  }
+
+  if (text === '/buy' || text?.startsWith('/buy ')) {
+    const parts = text.split(' ');
+    const addr = parts[1];
+    const amount = parseFloat(parts[2]) || undefined;
+    if (!addr || addr.length < 32) {
+      await sendTelegram('sendMessage', { chat_id: chatId, text: 'Usage: /buy <token_address> [sol_amount]\nExample: /buy 7GCihgDB8fe6KNjn2MYtkzZcRj12u6T6GcECpK8ZBo5F 0.05' });
+      return;
+    }
+    try {
+      const { executeBuy } = require('./trade-executor');
+      const { checkCircuitBreakers } = require('./exit-manager');
+      const cb = await checkCircuitBreakers();
+      if (cb.stopTrading) {
+        await sendTelegram('sendMessage', { chat_id: chatId, text: `🟡 *Circuit breaker active* — ${cb.reason}\nUse /resume to clear` });
+        return;
+      }
+      const result = await executeBuy(addr, 'manual', amount);
+      if (result.success) {
+        await sendTelegram('sendMessage', { chat_id: chatId, text: `✅ *Buy executed*\n${result.trade?.sol_amount?.toFixed(4) || '?'} SOL | CA: \`${addr}\``, parse_mode: 'Markdown' });
+      } else {
+        await sendTelegram('sendMessage', { chat_id: chatId, text: `❌ *Buy failed*\n${result.error}`, parse_mode: 'Markdown' });
+      }
+    } catch (e) {
+      await sendTelegram('sendMessage', { chat_id: chatId, text: '❌ Error: ' + e.message });
+    }
+  }
+
+  if (text === '/sell' || text?.startsWith('/sell ')) {
+    const parts = text.split(' ');
+    const addr = parts[1];
+    const ratio = parseFloat(parts[2]) || 1.0;
+    if (!addr || addr.length < 32) {
+      await sendTelegram('sendMessage', { chat_id: chatId, text: 'Usage: /sell <token_address> [ratio]\nRatio: 1.0 = 100%, 0.5 = 50%\nExample: /sell 7GCihgDB8fe6KNjn2MYtkzZcRj12u6T6GcECpK8ZBo5F 0.5' });
+      return;
+    }
+    try {
+      const { executeSell } = require('./trade-executor');
+      const result = await executeSell(addr, ratio, 'manual');
+      if (result.success) {
+        await sendTelegram('sendMessage', { chat_id: chatId, text: `💰 *Sell executed*\n${(ratio * 100).toFixed(0)}% of position | CA: \`${addr}\``, parse_mode: 'Markdown' });
+      } else {
+        await sendTelegram('sendMessage', { chat_id: chatId, text: `❌ *Sell failed*\n${result.error}`, parse_mode: 'Markdown' });
+      }
+    } catch (e) {
+      await sendTelegram('sendMessage', { chat_id: chatId, text: '❌ Error: ' + e.message });
     }
   }
 
