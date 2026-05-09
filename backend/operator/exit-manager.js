@@ -47,7 +47,7 @@ async function checkExitRules(position, currentPrice) {
   const pnl = entryPrice > 0 ? (currentPrice / entryPrice) - 1 : 0;
   for (const rule of EXIT_RULES) {
     if (pnl >= rule.pnlThreshold && !position[`sold_${rule.pnlThreshold}`]) {
-      return { triggered: true, rule, pnl, message: `🎯 *${rule.label}* — PnL: +${(pnl * 100).toFixed(0)}%` };
+      return { triggered: true, rule, pnl, message: `🎯 *${rule.label}* — PnL: +${(pnl * 100).toFixed(0)}% (${(1 + pnl).toFixed(2)}x)` };
     }
   }
   return null;
@@ -80,7 +80,7 @@ async function stopLossCheck(position, currentPrice) {
   const entryPrice = position.entry_price || 1;
   const pnl = (currentPrice / entryPrice) - 1;
   if (pnl <= STOP_LOSS_PCT) {
-    return { triggered: true, reason: 'stop_loss', pnl, message: `🛑 *STOP-LOSS HIT* — PnL: ${(pnl * 100).toFixed(0)}% at ${currentPrice.toFixed(6)}` };
+    return { triggered: true, reason: 'stop_loss', pnl, message: `🛑 *STOP-LOSS HIT* — PnL: ${(pnl * 100).toFixed(0)}% (${(1 + pnl).toFixed(2)}x) at ${currentPrice.toFixed(6)}` };
   }
   return null;
 }

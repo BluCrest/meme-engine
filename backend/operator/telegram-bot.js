@@ -392,7 +392,8 @@ async function handleUpdate(update) {
       const currentPrice = await require('../utils/price-feed').getCurrentPrice(addr);
       const pnl = p.entry_price > 0 ? ((currentPrice / p.entry_price) - 1) * 100 : 0;
       const ticker = p.symbol || addr.slice(0, 8);
-      msg += `$${ticker} — ${pnl.toFixed(1)}%\n   \`${addr}\`\n`;
+      const xRet = (1 + pnl / 100).toFixed(2);
+      msg += `$${ticker} — ${pnl.toFixed(1)}% (${xRet}x)\n   \`${addr}\`\n`;
       rows.push([{ text: `🔴 Sell $${ticker}`, callback_data: `sell_${addr}` }]);
     }
     msg += `\nUse /sell \\\`address\\\` [ratio] to sell directly`;
@@ -471,7 +472,8 @@ Use /portfolio for balance, /positions for open trades`;
         const currentPrice = await require('../utils/price-feed').getCurrentPrice(addr);
         const pnl = pos.entryPrice > 0 && currentPrice > 0 ? ((currentPrice / pos.entryPrice) - 1) * 100 : 0;
         const emoji = pnl > 10 ? '🚀' : pnl > 0 ? '📈' : '📉';
-        msg += `${emoji} *$${pos.symbol}* — ${pnl.toFixed(1)}%\n`;
+        const xRet = (1 + pnl / 100).toFixed(2);
+        msg += `${emoji} *$${pos.symbol}* — ${pnl.toFixed(1)}% (${xRet}x)\n`;
         msg += `   Entry: $${pos.entryPrice.toFixed(8)} | Now: $${currentPrice?.toFixed(8) || '?'}\n`;
         msg += `   Invested: ${pos.solInvested.toFixed(4)} SOL\n\n`;
       }
