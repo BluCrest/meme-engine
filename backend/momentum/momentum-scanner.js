@@ -63,7 +63,12 @@ function checkMomentum(address, paprika) {
   return null;
 }
 
+let scanCount = 0;
+let debugLogCount = 0;
+
 async function scanMomentum() {
+  scanCount++;
+  debugLogCount = 0;
   // Prune stale seen entries instead of clearing everything (prevents trigger bursts)
   if (Date.now() - seenClearedAt > SEEN_CLEAN_INTERVAL) {
     for (const [addr, ts] of seenTokens) {
@@ -119,6 +124,12 @@ async function scanMomentum() {
     seenTokens.set(addr, Date.now());
 
     const momentum = checkMomentum(addr, paprika);
+
+    // DEBUG: log first 3 non-zero-txn tokens per scan
+    if (debugLogCount < 3) {
+      console.log(`[Momentum] DEBUG ${resolvedSymbol}: txns5m=${JSON.stringify(paprika.txns5m)} vol5m=${JSON.stringify(paprika.vol5m)} buys5m=${JSON.stringify(paprika.buys5m)} sells5m=${JSON.stringify(paprika.sells5m)} momentum=${momentum?.trigger || null} hasRealAct=${paprika.txns5m >= MIN_SNIPE_TXNS && paprika.vol5m >= MIN_SNIPE_VOL_USD} hasCopy=${!!copyTradeSignal}`);
+      debugLogCount++;
+    }
 
     // Copy trade check
     let copyTradeSignal = null;

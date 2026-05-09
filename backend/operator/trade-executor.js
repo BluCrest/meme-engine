@@ -185,7 +185,8 @@ async function executeBuy(tokenAddr, mode, amountSol) {
       highest_price: price,
       status: 'open',
       opened_at: new Date(),
-      dev_wallet: await getDevWalletFromDB(tokenAddr)
+      dev_wallet: await getDevWalletFromDB(tokenAddr),
+      isPaperTrading: isPaperTrading
     });
     console.log('[Executor] Buy executed:', sig);
 

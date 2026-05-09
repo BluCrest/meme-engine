@@ -296,6 +296,7 @@ async function recordStopLoss(position, pnl) {
     pnl_pct: pnl * 100,
     entry_price: position.entry_price,
     sol_invested: position.sol_invested || 0,
+    mode: position.mode || (position.isPaperTrading ? 'paper' : 'real'),
     stopped_at: new Date(),
     cooldown_until: new Date(Date.now() + STOP_LOSS_COOLDOWN_MIN * 60 * 1000)
   });
@@ -315,11 +316,12 @@ async function checkCircuitBreakers() {
   // Paper trading: no real risk, skip loss-based circuit breakers
   if (await db.getPaperTrading()) return results;
 
-  // Daily drawdown: sum all stop-losses today
+  // Daily drawdown: sum all REAL stop-losses today (exclude paper mode)
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const todayLosses = await db.getDb().collection('stop_losses').find({
-    stopped_at: { $gte: today }
+    stopped_at: { $gte: today },
+    mode: { $ne: 'paper' }
   }).toArray();
   const totalLostToday = todayLosses.reduce((s, l) => s + (l.sol_invested || 0), 0);
   if (totalLostToday >= MAX_DAILY_LOSS_SOL) {
@@ -329,7 +331,7 @@ async function checkCircuitBreakers() {
   }
 
   // Consecutive losses — auto-resets after 30 minutes without a new stop-loss
-  const recentLosses = await db.getDb().collection('stop_losses').find()
+  const recentLosses = await db.getDb().collection('stop_losses').find({ mode: { $ne: 'paper' } })
     .sort({ stopped_at: -1 }).limit(CONSECUTIVE_LOSS_LIMIT).toArray();
   if (recentLosses.length >= CONSECUTIVE_LOSS_LIMIT) {
     const allRecent = recentLosses.every(l => l.pnl_pct < -20);
@@ -375,6 +377,12 @@ async function sendTelegramMessage(chatId, text) {
 }
 
 async function runExitManager() {
+  // Clean up old paper stop_losses (no mode field = legacy paper entries)
+  try {
+    const { deletedCount } = await db.getDb().collection('stop_losses').deleteMany({ mode: { $exists: false } });
+    if (deletedCount > 0) console.log(`[ExitMgr] Cleaned ${deletedCount} legacy paper stop-loss entries`);
+  } catch (_) {}
+
   const openPositions = await db.getOpenPositions();
   console.log(`[ExitMgr] Checking ${openPositions.length} open positions...`);
 
