@@ -100,11 +100,7 @@ async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerTyp
     const { executeBuy } = require('../operator/trade-executor');
     const result = await executeBuy(tokenAddress, 'momentum', solAmount);
     if (result && result.success) {
-      const entryPrice = result.price || (await getTokenPrice(tokenAddress));
-      if (!entryPrice) {
-        console.log(`[Momentum] ${symbol}: bought but no entry price`);
-        return null;
-      }
+      const entryPrice = result.trade?.price_at_trade || (await getTokenPrice(tokenAddress)) || 0.000001;
       const position = {
         tokenAddress, symbol,
         solInvested: solAmount,

@@ -115,12 +115,12 @@ async function executeBuy(tokenAddr, mode, amountSol) {
 
     if (!isPaperTrading && amountSol < MIN_BUY) throw new Error('Balance too low: ' + bal.toFixed(4) + ' SOL');
 
-    let sig, tokenAmt;
+    let sig, tokenAmt, buyPrice;
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
 
     // Paper trading: skip real swap execution
     if (await db.getPaperTrading()) {
-      const buyPrice = (await getCurrentPrice(tokenAddr)) || 0.000001;
+      buyPrice = (await getCurrentPrice(tokenAddr)) || 0.000001;
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       tokenAmt = amountSol / buyPrice;
       console.log(`[Executor] PAPER buy: ${amountSol} SOL → ${tokenAddr} @ ${buyPrice.toFixed(10)} SOL/token (${tokenAmt.toFixed(2)} tokens)`);
@@ -152,7 +152,7 @@ async function executeBuy(tokenAddr, mode, amountSol) {
       console.log(`[Executor] Jupiter buy: ${sig}`);
     }
     }
-    const price = await getCurrentPrice(tokenAddr);
+    const price = (await getCurrentPrice(tokenAddr)) || buyPrice || amountSol / tokenAmt;
     const mc = await getCurrentMC(tokenAddr);
     const tokenRec = await db.getToken(tokenAddr);
     const symbol = tokenRec?.symbol || tokenAddr.slice(0, 8);
