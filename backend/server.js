@@ -2,24 +2,19 @@ const express = require('express');
 const config = require('./config');
 const db = require('./database/db');
 
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason?.message || reason);
+});
+
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'meme-engine running' });
-});
-
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
-});
-
-// Telegram bot uses direct API calls - no webhook needed
-const { sendTokenAlert } = require('./operator/telegram-bot');
-
-// Health check with status details
-app.get('/', (req, res) => {
   res.json({
     status: 'ok',
     message: 'meme-engine running',
@@ -30,6 +25,9 @@ app.get('/', (req, res) => {
     }
   });
 });
+
+// Telegram bot uses direct API calls - no webhook needed
+const { sendTokenAlert } = require('./operator/telegram-bot');
 
 // Test endpoint: verify bot is reachable
 app.get('/telegram/test', async (req, res) => {

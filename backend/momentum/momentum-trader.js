@@ -127,7 +127,7 @@ async function checkPosition(tokenAddress) {
   }
 
   // Take profit
-  if (pnlPct >= TAKE_PROFIT - 1) {
+  if (pnlPct >= TAKE_PROFIT) {
     await executeMomentumSell(tokenAddress, `target_${(TAKE_PROFIT * 100).toFixed(0)}x`);
     return;
   }

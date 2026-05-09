@@ -58,13 +58,13 @@ function getMockDb() {
                 return results;
               },
               sort: function(sortObj) {
+                const parentFind = this;
                 return {
                   toArray: () => {
-                    return this.toArray().then(results => {
-                      const key = Object.keys(sortObj)[0];
-                      const dir = sortObj[key];
-                      return results.sort((a, b) => dir * (a[key] > b[key] ? 1 : -1));
-                    });
+                    const results = parentFind.toArray();
+                    const key = Object.keys(sortObj)[0];
+                    const dir = sortObj[key];
+                    return results.sort((a, b) => dir * (a[key] > b[key] ? 1 : -1));
                   }
                 };
               },

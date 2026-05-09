@@ -152,8 +152,11 @@ async function executeBuy(tokenAddr, mode, amountSol) {
     }
     const price = await getCurrentPrice(tokenAddr);
     const mc = await getCurrentMC(tokenAddr);
+    const tokenRec = await db.getToken(tokenAddr);
+    const symbol = tokenRec?.symbol || tokenAddr.slice(0, 8);
     const trade = {
       token_address: tokenAddr,
+      symbol,
       action: 'buy',
       sol_amount: amountSol,
       token_amount: tokenAmt,
@@ -180,7 +183,7 @@ async function executeBuy(tokenAddr, mode, amountSol) {
 
     // Send buy notification
     const { sendTradeNotification } = require('./telegram-bot');
-    await sendTradeNotification({ symbol: trade.symbol, address: tokenAddr, price }, 'buy', amountSol);
+    await sendTradeNotification({ symbol, address: tokenAddr, price }, 'buy', amountSol);
 
     return { success: true, signature: sig, trade: trade };
   } catch (e) {
@@ -221,8 +224,9 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     // Paper trading: skip real swap execution
     if (await db.getPaperTrading()) {
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      solVal = sellAmt * 0.0001 * 180; // simulate SOL return
-      console.log(`[Executor] PAPER sell: ${sellAmt} tokens → ${solVal.toFixed(6)} SOL (sig: ${sig})`);
+      const entryPrice = pos.entry_price || 0.0001;
+      solVal = sellAmt * entryPrice;
+      console.log(`[Executor] PAPER sell: ${sellAmt} tokens @ $${entryPrice} → ${solVal.toFixed(6)} SOL (sig: ${sig})`);
     } else {
     const quote = await getJupiterQuote(tokenAddr, SOL_MINT, sellLamports, 500);
     if (quote && !quote.error) {
@@ -298,7 +302,7 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     const { sendTradeNotification } = require('./telegram-bot');
     const tokenInfo = await db.getToken(tokenAddr);
     await sendTradeNotification(
-      { symbol: tokenInfo?.symbol, address: tokenAddr, price },
+      { symbol: tokenInfo?.symbol || tokenAddr.slice(0, 8), address: tokenAddr, price },
       'sell',
       solVal,
       pnlPercent

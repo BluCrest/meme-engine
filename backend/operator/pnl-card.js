@@ -70,11 +70,12 @@ ${report?.notes || token?.reasoning || 'N/A'}
 }
 
 async function sendPnLCard(chatId, tradeOrPosition) {
-  const { bot } = require('./telegram-bot');
   const card = await generatePnLCard(tradeOrPosition);
-
-  await bot.sendMessage(chatId || config.telegram.chatId, card, {
-    parse_mode: 'Markdown'
+  const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
+  await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId || config.telegram.chatId, text: card, parse_mode: 'Markdown' })
   });
 }
 
@@ -92,12 +93,13 @@ async function generatePortfolioSummary() {
   let wins = 0, losses = 0;
 
   for (const trade of closedTrades) {
-    totalInvested += trade.sol_amount || 0;
-    const returnMultiple = trade.price_at_trade && trade.mc_at_trade
-      ? trade.price_at_trade / trade.mc_at_trade : 0;
-    totalReturn += (trade.sol_amount || 0) * returnMultiple;
+    const soldAmount = trade.sol_amount || 0;
+    totalInvested += soldAmount;
+    const entryPrice = trade.price_at_trade || 0;
+    const exitPrice = trade.price_at_trade || 0;
+    totalReturn += soldAmount;
 
-    if (returnMultiple > 1) wins++;
+    if (trade.pnl_percent > 0) wins++;
     else losses++;
   }
 

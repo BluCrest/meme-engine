@@ -1,8 +1,7 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
 const config = require('../config');
 const { getTopHolders, getTotalSupply } = require('../utils/holders');
-
-const connection = new Connection(config.helius.rpcUrl, 'confirmed');
+const { executeWithFallback } = require('../utils/rpc-rotator');
 
 const { checkMintAuthority, checkLiquidityLock, simulateSell } = require('./safety-utils');
 
