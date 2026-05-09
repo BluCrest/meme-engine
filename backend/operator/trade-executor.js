@@ -7,6 +7,7 @@ const { getCurrentPrice, getCurrentMC } = require('../utils/price-feed');
 const { executeWithFallback, getConnection } = require('../utils/rpc-rotator');
 
 const SOL_MINT = 'So11111111111111111111111111111111111112';
+const SOL_USD_RATE = 150;
 
 let walletKeypair;
 const pk = config.helius?.privateKey;
@@ -120,7 +121,9 @@ async function executeBuy(tokenAddr, mode, amountSol) {
 
     // Paper trading: skip real swap execution
     if (await db.getPaperTrading()) {
-      buyPrice = (await getCurrentPrice(tokenAddr)) || 0.000001;
+      // getCurrentPrice returns USD — convert to SOL/token for paper math
+      const usdPrice = await getCurrentPrice(tokenAddr);
+      buyPrice = usdPrice ? usdPrice / SOL_USD_RATE : 0.000001;
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       tokenAmt = amountSol / buyPrice;
       console.log(`[Executor] PAPER buy: ${amountSol} SOL → ${tokenAddr} @ ${buyPrice.toFixed(10)} SOL/token (${tokenAmt.toFixed(2)} tokens)`);
@@ -152,7 +155,8 @@ async function executeBuy(tokenAddr, mode, amountSol) {
       console.log(`[Executor] Jupiter buy: ${sig}`);
     }
     }
-    const price = (await getCurrentPrice(tokenAddr)) || buyPrice || amountSol / tokenAmt;
+    const currentUsd = await getCurrentPrice(tokenAddr);
+    const price = (currentUsd ? currentUsd / SOL_USD_RATE : null) || buyPrice || amountSol / tokenAmt;
     const mc = await getCurrentMC(tokenAddr);
     const tokenRec = await db.getToken(tokenAddr);
     const symbol = tokenRec?.symbol || tokenAddr.slice(0, 8);
@@ -218,12 +222,12 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     // Paper trading: skip real swap execution and ATA lookup
     if (await db.getPaperTrading()) {
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      const price = currentPrice || pos.entry_price || 0.0001;
-      sellAmt = ((pos.sol_invested || 0.01) / (pos.entry_price || 0.0001) * sellRatio);
-      // No slippage when there's no real price data — paper can't fake a loss on a token that never moved
+      // currentPrice from getCurrentPrice is USD — convert to SOL/token
+      const priceSol = currentPrice ? currentPrice / SOL_USD_RATE : pos.entry_price || 0.000001;
+      sellAmt = ((pos.sol_invested || 0.01) / (pos.entry_price || 0.000001) * sellRatio);
       const slippage = currentPrice ? 0.95 : 1.0;
-      solVal = sellAmt * price * slippage;
-      console.log(`[Executor] PAPER sell: ${sellAmt.toFixed(2)} tokens @ ${price.toFixed(10)} SOL → ${solVal.toFixed(6)} SOL (sig: ${sig}, slippage: ${((1 - slippage) * 100).toFixed(0)}%)`);
+      solVal = sellAmt * priceSol * slippage;
+      console.log(`[Executor] PAPER sell: ${sellAmt.toFixed(2)} tokens @ ${priceSol.toFixed(10)} SOL → ${solVal.toFixed(6)} SOL (sig: ${sig}, slippage: ${((1 - slippage) * 100).toFixed(0)}%)`);
     } else {
     const ata = await getAssociatedTokenAddress(mintPubkey, walletKeypair.publicKey);
     let bal = 0;
@@ -260,7 +264,8 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     }
     }
     const mc = await getCurrentMC(tokenAddr);
-    const price = currentPrice || pos.entry_price || 0.0001;
+    const priceSol = currentPrice ? currentPrice / SOL_USD_RATE : pos.entry_price || 0.000001;
+    const price = priceSol;
     const trade = {
       token_address: tokenAddr,
       action: 'sell',
