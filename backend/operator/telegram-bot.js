@@ -368,7 +368,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\n⚡ Momentum sniping active — scans for volume spikes every 60s, auto-buys on buy pressure. Legacy scoring still running for quality plays.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/momentum - Active momentum trades\n/pnl - P&L summary\n/trades - Recent trades\n/buy <addr> - Buy a token\n/sell <addr> - Sell a position\n/help - All commands',
+      text: '🚀 *Meme Engine Active!*\n\n⚡ Momentum sniping active — scans for volume spikes every 60s, auto-buys on buy pressure. Legacy scoring still running for quality plays.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/momentum - Active momentum trades\n/pnl - P&L summary\n/trades - Recent trades\n/buy <addr> - Buy a token\n/sell <addr> - Sell a position\n/learn - Learning stats & weights\n/help - All commands',
       parse_mode: 'Markdown'
     });
   }
@@ -665,6 +665,45 @@ Circuit breaker: pauses new buys after 3 consecutive losses or daily loss limit.
     await db.getDb().collection('stop_losses').deleteMany({});
     console.log('[Telegram] Circuit breaker reset via /resume');
     await sendTelegram('sendMessage', { chat_id: chatId, text: '✅ *Circuit breaker cleared* — new buys resumed\n\nStop-loss history wiped. Bot will start buying again on next scan cycle.', parse_mode: 'Markdown' });
+  }
+
+  if (text === '/learn') {
+    try {
+      const patternMemory = require('../agents/pattern-memory');
+      const adaptiveWeights = require('../agents/adaptive-weights');
+      const { getTriggerStats, activePositions } = require('../momentum/momentum-trader');
+      const { formatX } = require('../utils/format-x');
+
+      const pm = patternMemory.getSummary();
+      const aw = adaptiveWeights.getCurrentWeights();
+      const ts = getTriggerStats();
+
+      let msg = `🧠 *Learning Dashboard*
+━━━━━━━━━━━━━━━━━━━━
+*Pattern Memory*
+📊 Evaluated: ${pm.totalEvaluated} | Bought: ${pm.totalBought}
+✅ Wins: ${pm.wins} | ❌ Losses: ${pm.losses}
+🎯 Win Rate: ${pm.winRate.toFixed(0)}% (last ${pm.totalClosed} closed)
+⚙️ Regime: ${pm.regime} (${pm.tighteningFactor.toFixed(2)}x)
+
+*Trigger Performance*
+`;
+      for (const [type, s] of Object.entries(ts).sort((a, b) => b[1].total - a[1].total)) {
+        const emoji = s.skipped ? '⏸️' : s.winRate > 50 ? '✅' : '❌';
+        msg += `${emoji} *${type}*: ${s.wins}W/${s.losses}L (${s.winRate}%)${s.skipped ? ' — SKIPPED' : ''}\n`;
+      }
+
+      msg += `\n*Adaptive Weights*
+`;
+      for (const [key, val] of Object.entries(aw)) {
+        msg += `• ${key}: ${typeof val === 'number' ? val.toFixed(3) : val}\n`;
+      }
+
+      msg += `\n*Active Positions*: ${activePositions.size}`;
+      await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
+    } catch (e) {
+      await sendTelegram('sendMessage', { chat_id: chatId, text: '❌ /learn error: ' + e.message });
+    }
   }
   } catch (e) {
     console.log('[TG] Command error:', e.message);

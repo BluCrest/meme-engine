@@ -379,4 +379,12 @@ async function startMomentumTrader() {
   setInterval(monitorPositions, MONITOR_INTERVAL);
 }
 
-module.exports = { startMomentumTrader, handleMomentumTrigger, activePositions };
+function getTriggerStats() {
+  const out = {};
+  for (const [type, s] of triggerStats) {
+    out[type] = { wins: s.wins, losses: s.losses, total: s.total, winRate: s.total > 0 ? (s.wins / s.total * 100).toFixed(0) : 0, skipped: s.total >= 3 && s.losses / s.total > 0.75 };
+  }
+  return out;
+}
+
+module.exports = { startMomentumTrader, handleMomentumTrigger, activePositions, getTriggerStats };

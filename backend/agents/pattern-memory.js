@@ -104,6 +104,23 @@ class PatternMemory {
     if (lossRate < 0.4) return 0.9;
     return 1.0;
   }
+
+  getSummary() {
+    const bought = Array.from(this.patternCache.values()).filter(e => e.wasBought);
+    const closed = bought.filter(e => e.outcome !== null && e.outcome !== undefined);
+    const wins = closed.filter(e => (e.outcome || 0) > 0).length;
+    const losses = closed.filter(e => (e.outcome || 0) <= 0).length;
+    const tightenFactor = this.getTighteningFactor();
+    return {
+      totalEvaluated: this.patternCache.size,
+      totalBought: bought.length,
+      totalClosed: closed.length,
+      wins, losses,
+      winRate: closed.length > 0 ? (wins / closed.length * 100) : 0,
+      tighteningFactor: tightenFactor,
+      regime: tightenFactor > 1.1 ? 'tight' : tightenFactor < 0.9 ? 'loose' : 'neutral'
+    };
+  }
 }
 
 module.exports = new PatternMemory();
