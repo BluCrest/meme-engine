@@ -1,5 +1,5 @@
 const DEXPAPRIKA_BASE = 'https://api.dexpaprika.com';
-const { rateLimitedFetch } = require('./dex-rate-limit');
+const { fetchPair } = require('../sources/source-rotator');
 
 async function fetchGranularActivity(tokenAddress) {
   try {
@@ -31,17 +31,10 @@ async function checkVitality(tokenAddress, dexscreenerPair) {
     momentum: 'unknown'
   };
 
-  // 0. Fetch DexScreener pair if not provided
+  // 0. Fetch pair data if not provided
   if (!dexscreenerPair) {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-      const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-      clearTimeout(timeout);
-      if (res.ok) {
-        const data = await res.json();
-        dexscreenerPair = data.pairs?.[0];
-      }
+      dexscreenerPair = await fetchPair(tokenAddress);
     } catch (_) {}
   }
 

@@ -1,15 +1,10 @@
 const db = require('../database/db');
-const { rateLimitedFetch } = require('../utils/dex-rate-limit');
+const { fetchPair } = require('../sources/source-rotator');
 
 const SELL_HISTORY = new Map();
 
 async function fetchDexScreenerPair(tokenAddress) {
-  try {
-    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.pairs?.[0] || null;
-  } catch (_) { return null; }
+  return fetchPair(tokenAddress);
 }
 
 async function fetchDexPaprikaActivity(tokenAddress) {

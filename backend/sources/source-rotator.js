@@ -1,6 +1,7 @@
 const dexScreener = require('./dex-screener');
 const gmgn = require('./gmgn');
 const pumpFun = require('./pump-fun');
+const { rateLimitedFetch } = require('../utils/dex-rate-limit');
 
 const SOURCES = [dexScreener, gmgn, pumpFun];
 let sourceIndex = 0;
@@ -72,8 +73,65 @@ async function fetchSearchPairs() {
   } catch { return []; }
 }
 
+// Convert unified token data to DexScreener-compatible pair format
+function toDexScreenerPair(data) {
+  if (!data) return null;
+  return {
+    priceUsd: String(data.priceUsd || 0),
+    fdv: data.fdv || 0,
+    liquidity: { usd: data.liquidityUsd || 0 },
+    volume: { m5: data.vol5m || 0, h1: data.vol1h || 0, h24: data.vol24h || 0 },
+    txns: {
+      m5: { buys: data.buys5m || 0, sells: data.sells5m || 0 },
+      h1: { buys: data.buys1h || 0, sells: data.sells1h || 0 },
+      h24: { buys: 0, sells: 0 }
+    },
+    priceChange: { m5: data.priceChange5m || 0, h1: data.priceChange1h || 0, h24: 0 },
+    baseToken: { symbol: data.symbol || null, name: data.name || null },
+    pairCreatedAt: data.pairCreatedAt || null,
+    dexId: data.dexId || null,
+    source: data.source || 'unknown'
+  };
+}
+
+async function fetchPair(tokenAddress) {
+  // Try multi-source first
+  const data = await fetchTokenData(tokenAddress);
+  if (data) return toDexScreenerPair(data);
+  // Fallback: direct DexScreener call as last resort
+  try {
+    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    if (res && res.ok) {
+      const json = await res.json();
+      return json.pairs?.[0] || null;
+    }
+  } catch {}
+  return null;
+}
+
+async function fetchPrice(tokenAddress) {
+  const p = await fetchPair(tokenAddress);
+  return p ? parseFloat(p.priceUsd) || 0 : 0;
+}
+
+async function fetchMC(tokenAddress) {
+  const p = await fetchPair(tokenAddress);
+  return p ? p.fdv || 0 : 0;
+}
+
+async function fetchSymbol(tokenAddress) {
+  const p = await fetchPair(tokenAddress);
+  return p?.baseToken?.symbol || 'UNKNOWN';
+}
+
+async function fetchName(tokenAddress) {
+  const p = await fetchPair(tokenAddress);
+  return p?.baseToken?.name || 'Unknown';
+}
+
 module.exports = {
   fetchTokenData, fetchTokenPrice, fetchDexVolume,
   fetchAllNewTokens, fetchSearchPairs,
+  fetchPair, fetchPrice, fetchMC, fetchSymbol, fetchName,
   rotate, getCurrent, sources: SOURCES
 };

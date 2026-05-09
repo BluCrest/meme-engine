@@ -1,3 +1,5 @@
+const { fetchTokenData } = require('../sources/source-rotator');
+
 const DEXPAPRIKA_BASE = 'https://api.dexpaprika.com';
 const GMGN_RANK_URL = 'https://gmgn.ai/defi/quotation/v1/rank/sol/swaps/24h';
 
@@ -22,9 +24,7 @@ async function fetchDexPaprikaVolume(tokenAddress) {
       liquidity_usd: s.liquidity_usd || 0,
       source: 'dexpaprika'
     };
-  } catch (e) {
-    return null;
-  }
+  } catch (_) { return null; }
 }
 
 async function fetchGMGNTokenVolume(tokenAddress) {
@@ -47,37 +47,43 @@ async function fetchGMGNTokenVolume(tokenAddress) {
       holder_count: match.holder_count || 0,
       source: 'gmgn'
     };
-  } catch (e) {
-    return null;
-  }
+  } catch (_) { return null; }
+}
+
+async function fetchPumpFunVolume(tokenAddress) {
+  try {
+    const data = await fetchTokenData(tokenAddress);
+    if (!data || data.source !== 'pumpfun') return null;
+    return {
+      volume_24h: data.vol24h || 0,
+      volume_1h: data.vol1h || 0,
+      volume_5m: data.vol5m || 0,
+      swaps_24h: data.txns5m || 0,
+      liquidity_usd: data.liquidityUsd || 0,
+      source: 'pumpfun'
+    };
+  } catch (_) { return null; }
 }
 
 async function getMultiSourceVolume(tokenAddress, dexscreenerVolume) {
   const results = [];
 
   if (dexscreenerVolume > 0) {
-    results.push({
-      volume_24h: dexscreenerVolume,
-      source: 'dexscreener'
-    });
+    results.push({ volume_24h: dexscreenerVolume, source: 'dexscreener' });
   }
 
-  const [dexPaprika, gmgn] = await Promise.all([
+  const [dexPaprika, gmgn, pumpfun] = await Promise.all([
     fetchDexPaprikaVolume(tokenAddress),
-    fetchGMGNTokenVolume(tokenAddress)
+    fetchGMGNTokenVolume(tokenAddress),
+    fetchPumpFunVolume(tokenAddress)
   ]);
 
   if (dexPaprika) results.push(dexPaprika);
   if (gmgn) results.push(gmgn);
+  if (pumpfun) results.push(pumpfun);
 
   if (!results.length) {
-    return {
-      volume_24h: 0,
-      volume_sources: 0,
-      avg_volume_24h: 0,
-      max_volume_24h: 0,
-      sources: []
-    };
+    return { volume_24h: 0, volume_sources: 0, avg_volume_24h: 0, max_volume_24h: 0, sources: [] };
   }
 
   const volumes = results.map(r => r.volume_24h || 0);
@@ -90,4 +96,4 @@ async function getMultiSourceVolume(tokenAddress, dexscreenerVolume) {
   };
 }
 
-module.exports = { getMultiSourceVolume, fetchDexPaprikaVolume, fetchGMGNTokenVolume };
+module.exports = { getMultiSourceVolume, fetchDexPaprikaVolume, fetchGMGNTokenVolume, fetchPumpFunVolume };

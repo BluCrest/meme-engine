@@ -2,7 +2,7 @@ const config = require('../config');
 const db = require('../database/db');
 const { computeFinalScore } = require('../strategist/score-engine');
 const { queueScoredToken } = require('../operator/telegram-bot');
-const { fetchWithRetry } = require('../utils/http-client');
+const { fetchAllNewTokens, fetchSearchPairs, fetchPair } = require('../sources/source-rotator');
 
 // DEX Program IDs to monitor
 const DEX_PROGRAMS = {
@@ -18,20 +18,17 @@ const CHECK_INTERVAL = 180000; // Check every 3 min
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// Two-pass: profiles for discovery, search for batch MC data, individual fetches only when needed
+// Multi-source: token discovery from DexScreener + GMGN + Pump.fun
 async function scanDexScreener() {
   try {
-    // Pass 1: Token profiles — discovers newly created tokens (1 API call)
-    const profileRes = await fetchWithRetry('https://api.dexscreener.com/token-profiles/latest/v1', { timeout: 8000, retryDelay: 2000 });
-    const profiles = await profileRes.json();
-
-    // Pass 2: Search results — batch MC data for many tokens (1 API call)
-    const searchRes = await fetchWithRetry('https://api.dexscreener.com/latest/dex/search?q=solana', { timeout: 8000, retryDelay: 2000 });
-    const searchData = await searchRes.json();
+    // Pass 1: Fetch all new tokens from all sources
+    const profiles = await fetchAllNewTokens();
+    // Pass 2: Search results for Solana tokens from DexScreener
+    const pairs = await fetchSearchPairs();
     const mcByAddress = new Map();
     const volByAddress = new Map();
-    if (searchData.pairs) {
-      for (const p of searchData.pairs) {
+    if (pairs) {
+      for (const p of pairs) {
         if (p.baseToken?.address) {
           mcByAddress.set(p.baseToken.address, p.fdv || 0);
           volByAddress.set(p.baseToken.address, p.volume?.h24 || 0);
@@ -44,8 +41,8 @@ async function scanDexScreener() {
     const seen = new Set();
 
     // Collect from search results (already have MC + volume + creation time)
-    if (searchData.pairs) {
-      for (const pair of searchData.pairs) {
+    if (pairs) {
+      for (const pair of pairs) {
         const addr = pair.baseToken?.address;
         if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
         if (seen.has(addr)) continue;
@@ -54,16 +51,14 @@ async function scanDexScreener() {
         if (mc > 3000 || mc < 1000) continue;
         const vol = pair.volume?.h24 || 0;
         if (vol < 500) continue;
-        // Skip if already rugged (>80% drop in 24h)
         const priceChange = pair.priceChange?.h24 || 0;
         if (priceChange < -80) continue;
-        // Age for scoring (passed to quick-flip tier later)
         const ageMin = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 999;
         candidates.push({ addr, symbol: pair.baseToken.symbol, name: pair.baseToken.name, mc, volume: vol, dex: pair.dexId, age_min: ageMin });
       }
     }
 
-    // Collect from profiles (may need individual MC fetch)
+    // Collect from multi-source profiles (may need individual pair fetch)
     if (Array.isArray(profiles)) {
       for (const profile of profiles) {
         const addr = profile.tokenAddress;
@@ -81,9 +76,7 @@ async function scanDexScreener() {
           if (candidates.length > 30) continue;
           await sleep(300);
           try {
-            const pairRes = await fetchWithRetry(`https://api.dexscreener.com/latest/dex/tokens/${addr}`, { timeout: 8000, retryDelay: 2000 });
-            const pairData = await pairRes.json();
-            const pair = pairData.pairs?.[0];
+            const pair = await fetchPair(addr);
             if (!pair) continue;
             const mc = pair.fdv || 0;
             if (mc > 3000 || mc < 1000) continue;

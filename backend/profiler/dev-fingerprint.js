@@ -1,6 +1,6 @@
 const db = require('../database/db');
 const config = require('../config');
-const { rateLimitedFetch } = require('../utils/dex-rate-limit');
+const { fetchPair } = require('../sources/source-rotator');
 
 function isRecentlyUpdated(profile, minutes = 60) {
   if (!profile?.updated_at) return false;
@@ -57,9 +57,7 @@ async function getTokenSnapshotsFromDB(tokenAddress) {
 
 async function getPriceHistory(tokenAddress) {
   try {
-    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-    const data = await res.json();
-    const pair = data.pairs?.[0];
+    const pair = await fetchPair(tokenAddress);
     if (!pair) return [];
 
     const current = {

@@ -1,6 +1,6 @@
 const { PublicKey } = require('@solana/web3.js');
 const { executeWithFallback } = require('../utils/rpc-rotator');
-const { rateLimitedFetch } = require('../utils/dex-rate-limit');
+const { fetchPair } = require('../sources/source-rotator');
 
 function findBondingCurvePDA(tokenMint) {
   const [pda] = PublicKey.findProgramAddressSync(
@@ -37,10 +37,8 @@ async function checkLiquidityLock(tokenAddress) {
       return { locked: true, durationHours: 0, solInCurve, note: 'bonding_curve' };
     }
 
-    // Step 2: Graduated — check via DexScreener if it has a live pool
-    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-    const data = await res.json();
-    const pair = data.pairs?.[0];
+    // Step 2: Graduated — check via multi-source if it has a live pool
+    const pair = await fetchPair(tokenAddress);
 
     if (!pair || !pair.liquidity?.usd) {
       return { locked: false, durationHours: 0, note: 'no_pool_or_liquidity' };
