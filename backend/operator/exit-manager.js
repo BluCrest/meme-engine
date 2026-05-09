@@ -5,6 +5,7 @@ const { checkMomentumDivergence } = require('../detective/momentum-divergence');
 const { areSmartWalletsDumping, checkSmartWalletBalances } = require('../sentinel/wallet-dump-monitor');
 const { checkTokenSellPressure } = require('../sentinel/sell-pressure-monitor');
 const { getXSentiment } = require('../detective/x-scanner');
+const { formatX } = require('../utils/format-x');
 const config = require('../config');
 
 const EXIT_RULES = [
@@ -47,7 +48,7 @@ async function checkExitRules(position, currentPrice) {
   const pnl = entryPrice > 0 ? (currentPrice / entryPrice) - 1 : 0;
   for (const rule of EXIT_RULES) {
     if (pnl >= rule.pnlThreshold && !position[`sold_${rule.pnlThreshold}`]) {
-      return { triggered: true, rule, pnl, message: `🎯 *${rule.label}* — PnL: +${(pnl * 100).toFixed(0)}% (${(1 + pnl).toFixed(2)}x)` };
+      return { triggered: true, rule, pnl, message: `🎯 *${rule.label}* — PnL: +${(pnl * 100).toFixed(0)}% (${formatX(pnl)})` };
     }
   }
   return null;
@@ -80,7 +81,7 @@ async function stopLossCheck(position, currentPrice) {
   const entryPrice = position.entry_price || 1;
   const pnl = (currentPrice / entryPrice) - 1;
   if (pnl <= STOP_LOSS_PCT) {
-    return { triggered: true, reason: 'stop_loss', pnl, message: `🛑 *STOP-LOSS HIT* — PnL: ${(pnl * 100).toFixed(0)}% (${(1 + pnl).toFixed(2)}x) at ${currentPrice.toFixed(6)}` };
+    return { triggered: true, reason: 'stop_loss', pnl, message: `🛑 *STOP-LOSS HIT* — PnL: ${(pnl * 100).toFixed(0)}% (${formatX(pnl)}) at ${currentPrice.toFixed(6)}` };
   }
   return null;
 }

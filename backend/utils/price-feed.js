@@ -1,16 +1,8 @@
 const db = require('../database/db');
+const { rateLimitedFetch } = require('./dex-rate-limit');
 
 const priceCache = new Map();
 const CACHE_TTL = 120000; // 2 min cache
-let lastDexCall = 0;
-
-async function rateLimitedFetch(url) {
-  const now = Date.now();
-  const gap = now - lastDexCall;
-  if (gap < 600) await new Promise(r => setTimeout(r, 600 - gap));
-  lastDexCall = Date.now();
-  return fetch(url);
-}
 
 async function getCurrentPrice(tokenAddress) {
   const cached = priceCache.get(tokenAddress);

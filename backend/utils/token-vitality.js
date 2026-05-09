@@ -1,4 +1,5 @@
 const DEXPAPRIKA_BASE = 'https://api.dexpaprika.com';
+const { rateLimitedFetch } = require('./dex-rate-limit');
 
 async function fetchGranularActivity(tokenAddress) {
   try {
@@ -35,7 +36,7 @@ async function checkVitality(tokenAddress, dexscreenerPair) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8000);
-      const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, { signal: controller.signal });
+      const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
       clearTimeout(timeout);
       if (res.ok) {
         const data = await res.json();

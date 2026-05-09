@@ -136,7 +136,8 @@ async function executeMomentumSell(tokenAddress, reason) {
       const pnl = pos.entryPrice > 0 ? ((currentPrice / pos.entryPrice) - 1) * 100 : 0;
       const emoji = pnl > 0 ? '✅' : '❌';
       console.log(`[Momentum] ${pos.symbol}: SOLD (${reason}) PnL: ${pnl.toFixed(1)}%`);
-      await sendTelegramMessage(`${emoji} *$${pos.symbol}* sold — ${pnl > 0 ? '+' : ''}${pnl.toFixed(1)}% (${(1 + pnl/100).toFixed(2)}x) | ${reason} | Invested: ${pos.solInvested.toFixed(4)} SOL`);
+      const { formatX } = require('../utils/format-x');
+      await sendTelegramMessage(`${emoji} *$${pos.symbol}* sold — ${pnl > 0 ? '+' : ''}${pnl.toFixed(1)}% (${formatX(pnl / 100)}) | ${reason} | Invested: ${pos.solInvested.toFixed(4)} SOL`);
       recordTriggerResult(pos.trigger, pnl / 100);
     } else {
       console.log(`[Momentum] ${pos.symbol}: sell skipped/failed (${reason}) — removing from active positions`);

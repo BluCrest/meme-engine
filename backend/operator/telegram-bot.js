@@ -1,5 +1,6 @@
 const config = require('../config');
 const db = require('../database/db');
+const { formatX } = require('../utils/format-x');
 
 const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
@@ -72,6 +73,7 @@ async function registerCommands() {
         { command: 'buy', description: 'Buy token: /buy <address> [sol]' },
         { command: 'sell', description: 'Sell position: /sell <address> [ratio]' },
         { command: 'papertrading', description: 'Toggle paper trading on/off' },
+        { command: 'report', description: 'Per-token P&L breakdown' },
         { command: 'resume', description: 'Clear circuit breaker, resume buys' },
         { command: 'help', description: 'All commands' },
       ]
@@ -393,8 +395,9 @@ async function handleUpdate(update) {
       const currentPrice = await require('../utils/price-feed').getCurrentPrice(addr);
       const pnl = p.entry_price > 0 ? ((currentPrice / p.entry_price) - 1) * 100 : 0;
       const ticker = p.symbol || addr.slice(0, 8);
-      const xRet = (1 + pnl / 100).toFixed(2);
-      msg += `$${ticker} — ${pnl.toFixed(1)}% (${xRet}x)\n   \`${addr}\`\n`;
+      const { formatX } = require('../utils/format-x');
+      const xRet = formatX(pnl / 100);
+      msg += `$${ticker} — ${pnl.toFixed(1)}% (${xRet})\n   \`${addr}\`\n`;
       rows.push([{ text: `🔴 Sell $${ticker}`, callback_data: `sell_${addr}` }]);
     }
     msg += `\nUse /sell \\\`address\\\` [ratio] to sell directly`;
@@ -457,7 +460,7 @@ async function handleUpdate(update) {
 🎯 *Win Rate:* ${winRate.toFixed(0)}% (${wins}W / ${losses}L)
 📉 *Stop-Losses:* ${slCount} total (${todaySl} today)
 💵 *Net P&L:* ${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(4)} SOL
-${maxProfitTrade ? `🏆 *Best Trade:* $${maxProfitTrade.symbol} — +${maxProfitTrade.pnlPct.toFixed(0)}% (${(1 + maxProfitTrade.pnlPct/100).toFixed(2)}x)` : ''}
+${maxProfitTrade ? `🏆 *Best Trade:* $${maxProfitTrade.symbol} — +${maxProfitTrade.pnlPct.toFixed(0)}% (${formatX(maxProfitTrade.pnlPct/100)})` : ''}
 ${cb.stopTrading ? '\n🟡 *NEW BUYS PAUSED* — ' + cb.reason + '\n_Existing positions still managed (stop-losses, exits active)_\nUse /resume to clear' : ''}
 
 ━━━━━━━━━━━━━━━━━━━━
@@ -481,6 +484,42 @@ Use /portfolio for balance, /positions for open trades`;
     await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
   }
 
+  if (text === '/report') {
+    const allTrades = await db.getDb().collection('trades').find().sort({ timestamp: -1 }).toArray();
+    const buys = allTrades.filter(t => t.action === 'buy');
+    const sells = allTrades.filter(t => t.action === 'sell');
+    const tokens = new Map();
+    for (const b of buys) {
+      if (!tokens.has(b.token_address)) tokens.set(b.token_address, { buys: [], sells: [] });
+      tokens.get(b.token_address).buys.push(b);
+    }
+    for (const s of sells) {
+      if (!tokens.has(s.token_address)) tokens.set(s.token_address, { buys: [], sells: [] });
+      tokens.get(s.token_address).sells.push(s);
+    }
+    const perToken = [];
+    for (const [addr, data] of tokens) {
+      if (!data.sells.length) continue;
+      const totalInvested = data.buys.reduce((s, b) => s + (b.sol_amount || 0), 0);
+      const totalReturned = data.sells.reduce((s, sel) => s + (sel.sol_amount || 0), 0);
+      const pnl = totalReturned - totalInvested;
+      const pnlPct = totalInvested > 0 ? (pnl / totalInvested) * 100 : 0;
+      const symbol = data.sells[0]?.symbol || data.buys[0]?.symbol || addr.slice(0, 8);
+      perToken.push({ addr, symbol, totalInvested, totalReturned, pnl, pnlPct });
+    }
+    perToken.sort((a, b) => b.pnlPct - a.pnlPct);
+    let msg = '📋 *Per-Token P&L*\n━━━━━━━━━━━━━━━━━━━━\n\n';
+    let winners = 0, losers = 0;
+    for (const t of perToken) {
+      const emoji = t.pnl >= 0 ? '🟢' : '🔴';
+      if (t.pnl >= 0) winners++; else losers++;
+      msg += `${emoji} $${t.symbol} — ${t.pnl >= 0 ? '+' : ''}${t.pnlPct.toFixed(0)}% (${formatX(t.pnlPct / 100)})\n`;
+      msg += `   Invested ${t.totalInvested.toFixed(4)} → Returned ${t.totalReturned.toFixed(4)} SOL\n\n`;
+    }
+    msg += `━━━━━━━━━━━━━━━━━━━━\n${winners} winners / ${losers} losers`;
+    await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
+  }
+
   if (text === '/momentum') {
     try {
       const { activePositions } = require('../momentum/momentum-trader');
@@ -495,8 +534,8 @@ Use /portfolio for balance, /positions for open trades`;
         const currentPrice = await require('../utils/price-feed').getCurrentPrice(addr);
         const pnl = pos.entryPrice > 0 && currentPrice > 0 ? ((currentPrice / pos.entryPrice) - 1) * 100 : 0;
         const emoji = pnl > 10 ? '🚀' : pnl > 0 ? '📈' : '📉';
-        const xRet = (1 + pnl / 100).toFixed(2);
-        msg += `${emoji} *$${pos.symbol}* — ${pnl.toFixed(1)}% (${xRet}x)\n`;
+        const xRet = formatX(pnl / 100);
+        msg += `${emoji} *$${pos.symbol}* — ${pnl.toFixed(1)}% (${xRet})\n`;
         msg += `   Entry: $${pos.entryPrice.toFixed(8)} | Now: $${currentPrice?.toFixed(8) || '?'}\n`;
         msg += `   Invested: ${pos.solInvested.toFixed(4)} SOL\n\n`;
       }
@@ -541,6 +580,7 @@ Use /portfolio for balance, /positions for open trades`;
 /buy <address> [sol] - Buy a token
 /sell <address> [ratio] - Sell a position (1.0=100%)
 /papertrading [on|off] - Toggle paper trading mode (no real tx)
+/report - Per-token P&L breakdown
 /resume - Clear circuit breaker, resume new buys
 /help - This message
 

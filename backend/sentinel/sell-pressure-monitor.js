@@ -1,15 +1,11 @@
 const db = require('../database/db');
+const { rateLimitedFetch } = require('../utils/dex-rate-limit');
 
 const SELL_HISTORY = new Map();
-const PRESSURE_WINDOWS = [
-  { label: '5m', txnField: 'm5', buydField: 'm5', minTxns: 2 },
-  { label: '15m', txnField: 'm15', buydField: 'm15', minTxns: 5 },
-  { label: '1h', txnField: 'h1', buydField: 'h1', minTxns: 10 },
-];
 
 async function fetchDexScreenerPair(tokenAddress) {
   try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, { signal: AbortSignal.timeout(8000) });
+    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
     const data = await res.json();
     return data.pairs?.[0] || null;
