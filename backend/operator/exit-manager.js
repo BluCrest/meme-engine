@@ -232,6 +232,9 @@ async function recordStopLoss(position, pnl) {
 async function checkCircuitBreakers() {
   const results = { stopTrading: false, reason: '' };
 
+  // Paper trading: no real risk, skip loss-based circuit breakers
+  if (await db.getPaperTrading()) return results;
+
   // Daily drawdown: sum all stop-losses today
   const today = new Date();
   today.setHours(0, 0, 0, 0);
