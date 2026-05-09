@@ -38,10 +38,22 @@ async function fetchNewProfiles() {
 
 async function fetchSearchPairs() {
   try {
-    const res = await fetch('https://api.dexscreener.com/latest/dex/search?q=solana', { signal: AbortSignal.timeout(8000) });
+    const res = await fetch('https://api.dexscreener.com/token-profiles/latest/v1', { signal: AbortSignal.timeout(8000) });
     if (!res || !res.ok) return [];
-    const data = await res.json();
-    return data.pairs || [];
+    const profiles = await res.json();
+    const pairs = [];
+    for (const p of (profiles || [])) {
+      const addr = p.tokenAddress;
+      if (!addr) continue;
+      pairs.push({
+        baseToken: { address: addr, symbol: p.symbol, name: p.name },
+        fdv: 0,
+        volume: { h1: 0 },
+        pairCreatedAt: p.createdAt ? new Date(p.createdAt).getTime() : Date.now(),
+        dexId: 'dexscreener'
+      });
+    }
+    return pairs;
   } catch { return []; }
 }
 

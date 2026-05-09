@@ -13,6 +13,8 @@ const patternMemory = require('../agents/pattern-memory');
 const adaptiveWeights = require('../agents/adaptive-weights');
 const { computeConviction } = require('../agents/signal-confidence');
 const db = require('../database/db');
+const { getNarrativeScore, refreshKeywords } = require('../detective/narrative-scanner');
+refreshKeywords().catch(() => {});
 
 async function getDevWallet(tokenAddress) {
   const token = await db.getToken(tokenAddress);
@@ -34,10 +36,11 @@ async function computeFinalScore(tokenAddress) {
     }
 
     // Batch RPC calls to avoid rate limits while maximizing parallelism
-    // Batch 1: safety (RPC-heavy) + social (DexScreener, no RPC) + devWallet (DB, no RPC)
-    const [safety, social, devWallet] = await Promise.all([
+    // Batch 1: safety (RPC-heavy) + social (DexScreener) + narrative (cached) + devWallet (DB)
+    const [safety, social, narrative, devWallet] = await Promise.all([
       runSafetyCheck(tokenAddress),
       computeViralityVelocity(tokenAddress, symbol),
+      getNarrativeScore(symbol, token?.name),
       getDevWallet(tokenAddress)
     ]);
     await sleep(300);
@@ -83,14 +86,17 @@ async function computeFinalScore(tokenAddress) {
     const devScore = devProfile ? devProfile.reputation_score : 50;
 
     const socialAvailable = social.socialScore > 0;
+    const narrativeBonus = narrative.score || 0;
     const devWeight = socialAvailable ? 0.20 : 0.25;
     const safetyWeight = socialAvailable ? 0.25 : 0.30;
     const smartWeight = socialAvailable ? 0.15 : 0.20;
     const socialWeight = socialAvailable ? 0.15 : 0;
+    const narrativeWeight = narrativeBonus > 0 ? 0.10 : 0;
 
     let apeProbability = Math.min(100,
       safety.safetyScore * safetyWeight +
       social.socialScore * socialWeight +
+      narrativeBonus * narrativeWeight +
       smartMoney.smartMoneyScore * smartWeight +
       devScore * devWeight +
       gradBonus +
@@ -168,6 +174,7 @@ async function computeFinalScore(tokenAddress) {
       vitality,
       safety,
       social,
+      narrative,
       smartMoney,
       devProfile,
       graduationInfo,

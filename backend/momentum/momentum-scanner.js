@@ -1,6 +1,7 @@
 const { fetchDexVolume, fetchAllNewTokens, fetchSearchPairs } = require('../sources/source-rotator');
 const copyTrader = require('../agents/copy-trader');
 const { isRecentlySold } = require('./momentum-trader');
+const { getNarrativeScore } = require('../detective/narrative-scanner');
 
 const SCAN_INTERVAL = 15000; // 15s for near-instant sniping
 
@@ -95,12 +96,15 @@ async function scanMomentum() {
     const resolvedSymbol = profile.symbol || paprika.symbol || '?';
     const resolvedName = profile.name || paprika.baseToken || '';
 
-    // 0-txn tokens: first time gets 60s grace, then moves to 10min seenTokens
+    // 0-txn tokens: re-check every 30s for 3 min, then shelve for 10 min
     if (paprika.txns5m === 0) {
-      if (zeroTxnCooldown.has(addr)) {
-        seenTokens.set(addr, Date.now()); // still dead after grace — check again in 10min
+      const pending = zeroTxnCooldown.get(addr);
+      if (pending) {
+        if (Date.now() - pending > 180000) {
+          seenTokens.set(addr, Date.now()); // 3 min dead → shelve for 10 min
+        }
       } else {
-        zeroTxnCooldown.set(addr, Date.now()); // first check — give 60s for first txns
+        zeroTxnCooldown.set(addr, Date.now()); // first check — start 3 min re-check window
       }
       continue;
     }
@@ -139,7 +143,8 @@ async function scanMomentum() {
       paprika,
       copyTradeSignal,
       deployer,
-      isSnipe: !momentum
+      isSnipe: !momentum,
+      narrativeMatch: getNarrativeScore(resolvedSymbol, resolvedName)
     });
   }
 
@@ -173,7 +178,8 @@ async function scanMomentum() {
     if (momentum) {
       triggers.push({
         address: addr, symbol: pair.baseToken?.symbol || '?', name: pair.baseToken?.name || '',
-        momentum, paprika, copyTradeSignal: null, deployer: null, isSnipe: false
+        momentum, paprika, copyTradeSignal: null, deployer: null, isSnipe: false,
+        narrativeMatch: getNarrativeScore(pair.baseToken?.symbol, pair.baseToken?.name)
       });
     }
   }
