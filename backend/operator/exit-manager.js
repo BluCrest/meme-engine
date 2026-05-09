@@ -8,13 +8,8 @@ const { getXSentiment } = require('../detective/x-scanner');
 const { formatX } = require('../utils/format-x');
 const config = require('../config');
 
-const EXIT_RULES = [
-  { pnlThreshold: 0.5, sellRatio: 0.25, label: '1.5x tier: sell 25%' },
-  { pnlThreshold: 1.0, sellRatio: 0.25, label: '2x tier: sell another 25%' },
-  { pnlThreshold: 2.0, sellRatio: 0.20, label: '3x tier: sell 20%' },
-  { pnlThreshold: 4.0, sellRatio: 0.15, label: '5x tier: sell 15%' },
-];
-const STOP_LOSS_PCT = -0.35;
+const EXIT_RULES = [];
+const STOP_LOSS_PCT = -0.20;
 const LOW_BALANCE_ALERT = 0.02;
 const STOP_LOSS_COOLDOWN_MIN = 10;
 const MAX_DAILY_LOSS_SOL = 0.05;
@@ -57,10 +52,10 @@ async function checkExitRules(position, currentPrice) {
 async function trailingStopCheck(position, currentPrice) {
   const entryPrice = position.entry_price || 1;
   const pnl = (currentPrice / entryPrice) - 1;
-  if (pnl < 2.0) return null;
+  if (pnl < 0.2) return null;
   const peakPrice = position.highest_price || currentPrice;
   const drawdownFromPeak = (peakPrice - currentPrice) / peakPrice;
-  if (drawdownFromPeak >= 0.25) {
+  if (drawdownFromPeak >= 0.12) {
     return { triggered: true, reason: 'trailing_stop', message: `🛑 *TRAILING STOP HIT* — Drawdown: ${(drawdownFromPeak * 100).toFixed(0)}% from peak` };
   }
   return null;

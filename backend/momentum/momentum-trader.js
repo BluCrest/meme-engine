@@ -3,14 +3,16 @@ const config = require('../config');
 const copyTrader = require('../agents/copy-trader');
 
 const MONITOR_INTERVAL = 10000;
-const TAKE_PROFIT = 1.5;
-const STOP_LOSS = -0.30;
+const TAKE_PROFIT = 100;
+const STOP_LOSS = -0.20;
+const TRAILING_TRIGGER = 0.2;
 const TRAILING_PCT = 0.12;
 const MAX_POSITIONS = 3;
 const MAX_SNIPE_POSITIONS = 1;
 const MIN_BUY = 0.002;
 const MIN_BALANCE_FLOOR = 0.01;
 const MAX_BUYS_PER_HOUR = 4;
+const PAPER_TIMEOUT_MS = 900000;
 
 const BOT_TOKEN = config.telegram.botToken;
 const CHAT_ID = config.telegram.chatId;
@@ -161,13 +163,9 @@ async function checkPosition(tokenAddress) {
 
   copyTrader.recordPrice(tokenAddress, currentPrice);
 
-  // Paper mode: check exits same as live (take profit, stop loss, timeout)
+  // Paper mode: check exits same as live (trailing stop, stop loss, timeout)
   if (pos.isPaperTrading) {
-    if (pnlPct >= TAKE_PROFIT) {
-      await executeMomentumSell(tokenAddress, `paper_target_${(TAKE_PROFIT * 100).toFixed(0)}x`);
-      return;
-    }
-    if (pos.peakPrice > pos.entryPrice * 1.05) {
+    if (pos.peakPrice > pos.entryPrice * (1 + TRAILING_TRIGGER)) {
       const trailDrop = (pos.peakPrice - currentPrice) / pos.peakPrice;
       if (trailDrop >= TRAILING_PCT) {
         await executeMomentumSell(tokenAddress, `paper_trail_${(TRAILING_PCT * 100).toFixed(0)}pct`);
@@ -178,20 +176,15 @@ async function checkPosition(tokenAddress) {
       await executeMomentumSell(tokenAddress, `paper_stop_${(STOP_LOSS * 100).toFixed(0)}pct`);
       return;
     }
-    if (Date.now() - pos.boughtAt > 1800000) {
-      await executeMomentumSell(tokenAddress, 'paper_timeout_30m');
+    if (Date.now() - pos.boughtAt > PAPER_TIMEOUT_MS) {
+      await executeMomentumSell(tokenAddress, 'paper_timeout_15m');
       return;
     }
     return;
   }
 
-  // Take profit
-  if (pnlPct >= TAKE_PROFIT) {
-    await executeMomentumSell(tokenAddress, `target_${(TAKE_PROFIT * 100).toFixed(0)}x`);
-    return;
-  }
-  // Trailing stop
-  if (pos.peakPrice > pos.entryPrice * 1.05) {
+  // Trailing stop (activated after 1.2x)
+  if (pos.peakPrice > pos.entryPrice * (1 + TRAILING_TRIGGER)) {
     const trailDrop = (pos.peakPrice - currentPrice) / pos.peakPrice;
     if (trailDrop >= TRAILING_PCT) {
       await executeMomentumSell(tokenAddress, `trail_${(TRAILING_PCT * 100).toFixed(0)}pct`);
@@ -204,8 +197,8 @@ async function checkPosition(tokenAddress) {
     return;
   }
   // Timeout
-  if (Date.now() - pos.boughtAt > 1800000) {
-    await executeMomentumSell(tokenAddress, 'timeout_30m');
+  if (Date.now() - pos.boughtAt > PAPER_TIMEOUT_MS) {
+    await executeMomentumSell(tokenAddress, 'timeout_15m');
     return;
   }
 }
