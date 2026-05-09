@@ -88,6 +88,13 @@ async function stopLossCheck(position, currentPrice) {
 async function processExitsForPosition(position) {
   const chatId = config.telegram.chatId;
   try {
+    if (!position.token_address || position.token_address.startsWith('0x') || position.token_address.length < 30 || position.token_address.length > 50) {
+      await db.getDb().collection('positions').updateOne(
+        { _id: position._id },
+        { $set: { status: 'closed', closed_reason: 'invalid_address' } }
+      );
+      return;
+    }
     const currentPrice = await getCurrentPrice(position.token_address);
     if (!currentPrice) return;
 

@@ -65,9 +65,10 @@ function checkSellPressure(pair, paprika) {
     const m5Sells = m5.sells || 0;
     const m5Buys = m5.buys || 0;
     const m5Total = m5Buys + m5Sells;
+    let m5SellRatio = 0;
 
     if (m5Total >= 3) {
-      const m5SellRatio = m5Sells / m5Total;
+      m5SellRatio = m5Sells / m5Total;
       if (m5SellRatio > 0.7) {
         results.push({
           triggered: true,
