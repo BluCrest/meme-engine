@@ -14,7 +14,14 @@ async function pollUpdates() {
     const url = `${API_BASE}/getUpdates?offset=${pollingOffset}&timeout=5`;
     const res = await fetch(url);
     const data = await res.json();
-    if (!data.ok) { console.log('[TG Poll] API error:', data); return; }
+    if (!data.ok) {
+      if (data.error_code === 409) {
+        console.log('[TG Poll] 409 conflict — waiting 30s before retry');
+        return;
+      }
+      console.log('[TG Poll] API error:', data);
+      return;
+    }
     if (data.result?.length) {
       console.log(`[TG Poll] ${data.result.length} update(s), offset=${pollingOffset}`);
       for (const update of data.result) {
@@ -24,20 +31,9 @@ async function pollUpdates() {
           await handleCallback(update.callback_query);
         } else if (update.message) {
           await handleUpdate({ message: update.message });
+        }
+      }
     }
-  }
-
-  if (text === '/resume') {
-    try {
-      const db = require('../database/db');
-      await db.getDb().collection('stop_losses').deleteMany({});
-      console.log('[Telegram] Circuit breaker reset via /resume');
-      await sendTelegram('sendMessage', { chat_id: chatId, text: '✅ *Circuit breaker cleared* — new buys resumed\n\nStop-loss history wiped. Bot will start buying again on next scan cycle.', parse_mode: 'Markdown' });
-    } catch (e) {
-      await sendTelegram('sendMessage', { chat_id: chatId, text: '❌ Failed to reset: ' + e.message });
-    }
-  }
-}
   } catch (e) {
     console.log('[TG Poll] fetch error:', e.message);
   }
@@ -526,6 +522,14 @@ Circuit breaker: pauses new buys after 3 consecutive losses or daily loss limit.
       const current = await getPaperTrading();
       await sendTelegram('sendMessage', { chat_id: chatId, text: `📝 Paper trading is currently *${current ? 'ON' : 'OFF'}*\n\nUse /papertrading on or /papertrading off to toggle.`, parse_mode: 'Markdown' });
     }
+  }
+
+  if (text === '/resume') {
+    const db = require('../database/db');
+    const { checkCircuitBreakers } = require('./exit-manager');
+    await db.getDb().collection('stop_losses').deleteMany({});
+    console.log('[Telegram] Circuit breaker reset via /resume');
+    await sendTelegram('sendMessage', { chat_id: chatId, text: '✅ *Circuit breaker cleared* — new buys resumed\n\nStop-loss history wiped. Bot will start buying again on next scan cycle.', parse_mode: 'Markdown' });
   }
 }
 
