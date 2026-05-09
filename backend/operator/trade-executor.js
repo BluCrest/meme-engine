@@ -120,9 +120,11 @@ async function executeBuy(tokenAddr, mode, amountSol) {
 
     // Paper trading: skip real swap execution
     if (await db.getPaperTrading()) {
+      const buyPrice = await getCurrentPrice(tokenAddr);
+      if (!buyPrice || buyPrice <= 0) throw new Error('No price data for paper buy');
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      tokenAmt = lamports / 1e9 / 0.0001; // simulate token amount at ~0.0001 SOL/token
-      console.log(`[Executor] PAPER buy: ${amountSol} SOL → ${tokenAddr} (sig: ${sig})`);
+      tokenAmt = amountSol / buyPrice;
+      console.log(`[Executor] PAPER buy: ${amountSol} SOL → ${tokenAddr} @ ${buyPrice.toFixed(10)} SOL/token (${tokenAmt.toFixed(2)} tokens)`);
     } else {
     // Check bonding curve FIRST for micro-caps — saves Jupiter API calls
     const { pumpBuy, isOnBondingCurve } = require('../utils/pump-swap');
@@ -210,14 +212,15 @@ async function executeSell(tokenAddr, sellRatio, reason) {
     if (!pos) throw new Error('No open position');
 
     let sig, solVal, sellAmt;
+    const currentPrice = await getCurrentPrice(tokenAddr);
 
     // Paper trading: skip real swap execution and ATA lookup
     if (await db.getPaperTrading()) {
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      sellAmt = (pos.sol_invested || 0.01) / (pos.entry_price || 0.0001) * sellRatio;
-      const entryPrice = pos.entry_price || 0.0001;
-      solVal = sellAmt * entryPrice * 0.95;
-      console.log(`[Executor] PAPER sell: ${sellAmt.toFixed(2)} tokens @ $${entryPrice} → ${solVal.toFixed(6)} SOL (sig: ${sig})`);
+      const price = currentPrice || pos.entry_price || 0.0001;
+      sellAmt = ((pos.sol_invested || 0.01) / (pos.entry_price || 0.0001) * sellRatio);
+      solVal = sellAmt * price * 0.95;
+      console.log(`[Executor] PAPER sell: ${sellAmt.toFixed(2)} tokens @ ${price.toFixed(10)} SOL → ${solVal.toFixed(6)} SOL (sig: ${sig})`);
     } else {
     const ata = await getAssociatedTokenAddress(mintPubkey, walletKeypair.publicKey);
     let bal = 0;
@@ -252,8 +255,8 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       solVal = sellAmt * 0.9; // rough estimate after fees
     }
     }
-    const price = await getCurrentPrice(tokenAddr);
     const mc = await getCurrentMC(tokenAddr);
+    const price = currentPrice || pos.entry_price || 0.0001;
     const trade = {
       token_address: tokenAddr,
       action: 'sell',
