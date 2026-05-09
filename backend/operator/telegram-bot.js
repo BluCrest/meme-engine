@@ -361,6 +361,9 @@ async function handleUpdate(update) {
 
   const chatId = msg.chat?.id;
   const text = msg.text;
+  if (!text) return;
+
+  try {
 
   if (text === '/start') {
     await sendTelegram('sendMessage', {
@@ -428,8 +431,10 @@ async function handleUpdate(update) {
     }
 
     let totalInvested = 0, totalReturned = 0, wins = 0, losses = 0, maxProfitTrade = null, maxProfitPct = 0;
+    let closedCount = 0;
     for (const [addr, group] of tokenTrades) {
       if (!group.sells.length) continue;
+      closedCount++;
       const invested = group.buys.reduce((s, v) => s + v, 0);
       const returned = group.sells.reduce((s, v) => s + v, 0);
       totalInvested += invested;
@@ -454,7 +459,7 @@ async function handleUpdate(update) {
     let msg = `📈 *P&L Summary*
 ━━━━━━━━━━━━━━━━━━━━
 💰 *Wallet:* ${bal.toFixed(4)} SOL
-📊 *Trades:* ${sells.length} closed | ${openPositions.length} open
+📊 *Trades:* ${closedCount} closed | ${openPositions.length} open
 🎯 *Win Rate:* ${winRate.toFixed(0)}% (${wins}W / ${losses}L)
 📉 *Stop-Losses:* ${slCount} total (${todaySl} today)
 💵 *Net P&L:* ${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(4)} SOL
@@ -660,6 +665,9 @@ Circuit breaker: pauses new buys after 3 consecutive losses or daily loss limit.
     await db.getDb().collection('stop_losses').deleteMany({});
     console.log('[Telegram] Circuit breaker reset via /resume');
     await sendTelegram('sendMessage', { chat_id: chatId, text: '✅ *Circuit breaker cleared* — new buys resumed\n\nStop-loss history wiped. Bot will start buying again on next scan cycle.', parse_mode: 'Markdown' });
+  }
+  } catch (e) {
+    console.log('[TG] Command error:', e.message);
   }
 }
 

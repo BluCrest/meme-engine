@@ -282,6 +282,7 @@ async function executeSell(tokenAddr, sellRatio, reason) {
         const adaptiveWeights = require('../agents/adaptive-weights');
         const tokenRec = await db.getToken(tokenAddr);
         await adaptiveWeights.recordResult(tokenAddr, tokenRec?.ape_probability || 0, pnlPercent);
+        await adaptiveWeights.adjustWeights();
       } catch (_) {}
     } else {
       await db.getDb().collection('positions').updateOne(

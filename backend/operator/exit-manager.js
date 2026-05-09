@@ -79,17 +79,22 @@ async function getExitParams(position) {
     const nearRugTime = proximityToRugTime > 0.7;
     const nearExit = nearPeak || nearRugTime;
 
+    // Pattern memory: tighten exits during losing streaks, loosen during winning streaks
+    const patternMemory = require('../agents/pattern-memory');
+    const tightenFactor = patternMemory.getTighteningFactor();
+
     if (rep > 70 && rugRate < 0.3) {
-      params.trailingDrawdown = Math.min(0.25, 0.12 + (rep - 70) / 200);
+      params.trailingDrawdown = Math.min(0.25, 0.12 + (rep - 70) / 200) * (1 / tightenFactor);
       params.trailingTrigger = Math.min(5, Math.max(0.2, avgPeak * 0.4));
-      params.stopLossPct = -0.25;
+      params.stopLossPct = Math.max(-0.30, -0.25 * (1 / tightenFactor));
       if (nearExit) params.pressureSellOnMedium = true;
     } else if (rugRate > 0.7 || rep < 30) {
-      params.trailingDrawdown = 0.08;
+      params.trailingDrawdown = Math.min(0.15, 0.08 * tightenFactor);
       params.trailingTrigger = 0.15;
-      params.stopLossPct = -0.15;
+      params.stopLossPct = Math.max(-0.20, -0.15 * (1 / tightenFactor));
       if (nearExit) params.pressureSellOnMedium = true;
     } else {
+      params.trailingDrawdown = Math.min(0.15, 0.12 * tightenFactor);
       if (nearExit) params.pressureSellOnMedium = true;
     }
     if (dev.avg_time_to_rug_hours && dev.avg_time_to_rug_hours > 0) {

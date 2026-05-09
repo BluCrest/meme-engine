@@ -80,49 +80,19 @@ async function computeFinalScore(tokenAddress) {
       return { status: 'disqualified', reason: 'token_dead: ' + tokenVitality.reasons.join(', '), apeProbability: 0, shouldAlert: false, vitality: tokenVitality };
     }
 
-    const devModifier = devProfile ? devProfile.reputation_score / 100 : 0.5;
-
-    const gradBonus =
-      graduationInfo.graduationSignal === 'graduating_now' ? 15 :
-      graduationInfo.graduationSignal === 'close_to_grad' ? 8 : 0;
-
-    const vol = token?.volume_24h || 0;
-    const mc = token?.current_mc || 0;
-    const tokenAge = token?.age_min || 999;
-
-    // Micro-cap bonus: lower MC = more room to grow
-    const mcBonus = mc < 1200 ? 12 : mc < 1500 ? 9 : mc < 2000 ? 6 : mc < 2500 ? 3 : 0;
-
-    // Freshness bonus: younger tokens have more upside potential
-    const freshnessBonus = tokenAge < 2 ? 10 : tokenAge < 5 ? 7 : tokenAge < 10 ? 4 : tokenAge < 30 ? 2 : 0;
-
-    // Volume/MC ratio bonus: high relative volume means active trading
-    const volMcRatio = mc > 0 ? vol / mc : 0;
-    const volMcBonus = volMcRatio > 5 ? 8 : volMcRatio > 2 ? 5 : volMcRatio > 0.5 ? 3 : volMcRatio > 0.1 ? 1 : 0;
-
-    // Multi-source volume bonus
-    const multiSourceBonus = (token?.multi_volume?.volume_sources || 1) >= 2 ? 3 : 0;
-
-    // Bonding curve velocity bonus: fast SOL accumulation = high graduation probability
-    const velocity = graduationInfo.velocity;
-    const velocityBonus = velocity?.velocitySolPerMin > 1 ? 12 :
-      velocity?.velocitySolPerMin > 0.5 ? 8 :
-      velocity?.velocitySolPerMin > 0.2 ? 4 : 0;
-
-    // Smart money confidence bonus: more smart wallets = higher conviction
-    const smCount = smartMoney.smartMoneyCount || 0;
-    const smConfidenceBonus = smCount >= 5 ? 10 : smCount >= 3 ? 6 : smCount >= 1 ? 2 : 0;
+    const devScore = devProfile ? devProfile.reputation_score : 50;
 
     const socialAvailable = social.socialScore > 0;
-    const safetyWeight = socialAvailable ? 0.30 : 0.40;
-    const smartWeight = socialAvailable ? 0.25 : 0.30;
+    const devWeight = socialAvailable ? 0.20 : 0.25;
+    const safetyWeight = socialAvailable ? 0.25 : 0.30;
+    const smartWeight = socialAvailable ? 0.15 : 0.20;
     const socialWeight = socialAvailable ? 0.15 : 0;
 
     let apeProbability = Math.min(100,
       safety.safetyScore * safetyWeight +
       social.socialScore * socialWeight +
       smartMoney.smartMoneyScore * smartWeight +
-      devModifier * 12 +
+      devScore * devWeight +
       gradBonus +
       mcBonus +
       freshnessBonus +
