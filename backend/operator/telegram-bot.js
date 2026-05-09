@@ -417,31 +417,29 @@ async function handleUpdate(update) {
     const stopLosses = await db.getDb().collection('stop_losses').find().sort({ stopped_at: -1 }).limit(10).toArray();
     const bal = await getBalance();
 
-    // Match buys and sells by token_address to compute real PnL
-    const buys = allTrades.filter(t => t.action === 'buy');
-    const sells = allTrades.filter(t => t.action === 'sell');
-    const buyMap = new Map();
-    for (const b of buys) {
-      if (!buyMap.has(b.token_address)) buyMap.set(b.token_address, []);
-      buyMap.get(b.token_address).push(b);
+    // Group trades by token and compute aggregate PnL
+    const tokenTrades = new Map();
+    for (const t of allTrades) {
+      const addr = t.token_address;
+      if (!tokenTrades.has(addr)) tokenTrades.set(addr, { buys: [], sells: [], symbol: t.symbol || addr.slice(0, 8) });
+      const group = tokenTrades.get(addr);
+      if (t.action === 'buy') group.buys.push(t.sol_amount || 0);
+      else if (t.action === 'sell') group.sells.push(t.sol_amount || 0);
     }
 
     let totalInvested = 0, totalReturned = 0, wins = 0, losses = 0, maxProfitTrade = null, maxProfitPct = 0;
-    for (const s of sells) {
-      const addr = s.token_address;
-      const matchedBuys = buyMap.get(addr) || [];
-      // Find the buy that invested into this sell (by matching sol amount range)
-      const buy = matchedBuys.find(b => b.sol_amount && s.sol_amount && Math.abs(b.sol_amount - s.sol_amount) < s.sol_amount * 0.5) || matchedBuys.pop();
-      const investAmount = buy?.sol_amount || 0;
-      const returnAmount = s.sol_amount || 0;
-      totalInvested += investAmount;
-      totalReturned += returnAmount;
-      const profit = returnAmount - investAmount;
-      const pnlPct = investAmount > 0 ? ((returnAmount / investAmount) - 1) * 100 : 0;
-      if (profit >= 0) wins++; else losses++;
+    for (const [addr, group] of tokenTrades) {
+      if (!group.sells.length) continue;
+      const invested = group.buys.reduce((s, v) => s + v, 0);
+      const returned = group.sells.reduce((s, v) => s + v, 0);
+      totalInvested += invested;
+      totalReturned += returned;
+      const pnl = returned - invested;
+      const pnlPct = invested > 0 ? (pnl / invested) * 100 : 0;
+      if (pnl >= 0) wins++; else losses++;
       if (pnlPct > maxProfitPct) {
         maxProfitPct = pnlPct;
-        maxProfitTrade = { symbol: s.symbol || addr.slice(0, 8), pnlPct, profit };
+        maxProfitTrade = { symbol: group.symbol, pnlPct, profit: pnl };
       }
     }
 
