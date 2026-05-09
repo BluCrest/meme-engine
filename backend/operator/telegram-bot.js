@@ -385,6 +385,7 @@ async function handleUpdate(update) {
       return;
     }
     let msg = '📊 *Open Positions*\n\n';
+    const rows = [];
     for (const p of positions) {
       const addr = p.token_address;
       if (!addr) continue;
@@ -392,9 +393,15 @@ async function handleUpdate(update) {
       const pnl = p.entry_price > 0 ? ((currentPrice / p.entry_price) - 1) * 100 : 0;
       const ticker = p.symbol || addr.slice(0, 8);
       msg += `$${ticker} — ${pnl.toFixed(1)}%\n   \`${addr}\`\n`;
+      rows.push([{ text: `🔴 Sell $${ticker}`, callback_data: `sell_${addr}` }]);
     }
-    msg += `\nUse /sell \\\`address\\\` [ratio] to sell a position\nExample: /sell \\\`${(positions[0]?.token_address || 'address').slice(0, 8)}...\\\` 0.5`;
-    await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
+    msg += `\nUse /sell \\\`address\\\` [ratio] to sell directly`;
+    await sendTelegram('sendMessage', {
+      chat_id: chatId,
+      text: msg,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: rows }
+    });
   }
 
   if (text === '/pnl') {

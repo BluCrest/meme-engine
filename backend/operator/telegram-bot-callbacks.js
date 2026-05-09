@@ -21,7 +21,64 @@ async function sendTelegram(method, data = {}) {
 
 async function handleCallback(query) {
   const data = query.data;
-  const [action, address] = data.split('_');
+  const parts = data.split('_');
+  const action = parts[0];
+
+  if (action === 'sell') {
+    const address = parts.slice(1).join('_');
+    await sendTelegram('answerCallbackQuery', {
+      callback_query_id: query.id
+    });
+    await sendTelegram('sendMessage', {
+      chat_id: query.message.chat.id,
+      text: `How much of \`${address.slice(0, 12)}...\` do you want to sell?`,
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🔶 25%', callback_data: `si_${address}_0.25` },
+            { text: '🔶 50%', callback_data: `si_${address}_0.5` },
+            { text: '🔴 100%', callback_data: `si_${address}_1.0` }
+          ]
+        ]
+      }
+    });
+    return;
+  }
+
+  if (action === 'si') {
+    const partsCopy = [...parts];
+    const ratioStr = partsCopy.pop();
+    const address = partsCopy.slice(1).join('_');
+    const ratio = parseFloat(ratioStr);
+
+    try {
+      const { executeSell } = require('./trade-executor');
+      const result = await executeSell(address, ratio, 'manual');
+      await sendTelegram('answerCallbackQuery', {
+        callback_query_id: query.id,
+        text: result.success ? `💰 Sold ${(ratio * 100).toFixed(0)}%` : '❌ ' + (result.error || 'Sell failed'),
+        show_alert: true
+      });
+      if (result.success) {
+        await sendTelegram('editMessageText', {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          text: `✅ *Sold* ${(ratio * 100).toFixed(0)}% of \`${address.slice(0, 12)}...\``,
+          parse_mode: 'Markdown'
+        });
+      }
+    } catch (e) {
+      await sendTelegram('answerCallbackQuery', {
+        callback_query_id: query.id,
+        text: '❌ Error: ' + e.message,
+        show_alert: true
+      });
+    }
+    return;
+  }
+
+  const address = parts.slice(1).join('_');
 
   switch (action) {
     case 'ape':
