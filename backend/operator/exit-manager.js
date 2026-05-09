@@ -2,6 +2,9 @@ const db = require('../database/db');
 const { executeSell } = require('./trade-executor');
 const { sendPnLCard, generatePnLCard } = require('./pnl-card');
 const { checkMomentumDivergence } = require('../detective/momentum-divergence');
+const { areSmartWalletsDumping, checkSmartWalletBalances } = require('../sentinel/wallet-dump-monitor');
+const { checkTokenSellPressure } = require('../sentinel/sell-pressure-monitor');
+const { getXSentiment } = require('../detective/x-scanner');
 const config = require('../config');
 
 const EXIT_RULES = [
@@ -129,14 +132,58 @@ async function processExitsForPosition(position) {
       }
     }
 
-    // 3. Momentum Divergence Exit
+    // 3. Onchain sell pressure (DexScreener + DexPaprika buy/sell ratios)
+    const pressureSignals = await checkTokenSellPressure(position.token_address);
+    if (pressureSignals) {
+      const critical = pressureSignals.find(s => s.severity === 'critical');
+      if (critical) {
+        await executeSell(position.token_address, 1.0, critical.reason);
+        await sendTelegramMessage(chatId, critical.message);
+        return;
+      }
+      const high = pressureSignals.find(s => s.severity === 'high');
+      if (high) {
+        await executeSell(position.token_address, 0.5, high.reason);
+        await sendTelegramMessage(chatId, high.message);
+      }
+      const medium = pressureSignals.find(s => s.severity === 'medium' && s.triggered);
+      if (medium && !high && !critical) {
+        await sendTelegramMessage(chatId, medium.message + ' — monitoring');
+      }
+    }
+
+    // 4. Wallet dump detection (smart wallets selling the same token)
+    const walletDump = await areSmartWalletsDumping(position.token_address, position.symbol);
+    if (walletDump && walletDump.triggered) {
+      await executeSell(position.token_address, 1.0, walletDump.reason);
+      await sendTelegramMessage(chatId, walletDump.message);
+      return;
+    }
+    const balanceDrop = await checkSmartWalletBalances(position.token_address);
+    if (balanceDrop && balanceDrop.triggered) {
+      await executeSell(position.token_address, 1.0, balanceDrop.reason);
+      await sendTelegramMessage(chatId, balanceDrop.message);
+      return;
+    }
+
+    // 5. X social sentiment check for held tokens
+    if (position.symbol) {
+      try {
+        const sentiment = await getXSentiment(`$${position.symbol}`, 30);
+        if (sentiment.volume >= 5 && sentiment.score < 30) {
+          await sendTelegramMessage(chatId, `🐻 *BEARISH SENTIMENT* on $${position.symbol} (X score: ${sentiment.score}/100) — watching`);
+        }
+      } catch (_) {}
+    }
+
+    // 6. Momentum Divergence Exit
     const divergenceExit = await momentumDivergenceExit(position.token_address, position, currentPrice);
     if (divergenceExit) {
       await executeSell(position.token_address, 0.5, divergenceExit.reason);
       await sendTelegramMessage(chatId, divergenceExit.message);
     }
 
-    // 4. Exit Rules (scaling sells)
+    // 7. Exit Rules (scaling sells)
     const exitRule = await checkExitRules(position, currentPrice);
     if (exitRule) {
       await executeSell(position.token_address, exitRule.rule.sellRatio, `exit_rule_${exitRule.rule.pnlThreshold}`);
@@ -145,7 +192,7 @@ async function processExitsForPosition(position) {
       return;
     }
 
-    // 5. Trailing Stop
+    // 8. Trailing Stop
     const trailing = await trailingStopCheck(position, currentPrice);
     if (trailing) {
       await executeSell(position.token_address, 1.0, trailing.reason);

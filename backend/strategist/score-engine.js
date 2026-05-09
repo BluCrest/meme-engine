@@ -113,14 +113,14 @@ async function computeFinalScore(tokenAddress) {
     const smCount = smartMoney.smartMoneyCount || 0;
     const smConfidenceBonus = smCount >= 5 ? 10 : smCount >= 3 ? 6 : smCount >= 1 ? 2 : 0;
 
-    // Weights (social = 0 since X API disabled, redistribute to safety + smart)
     const socialAvailable = social.socialScore > 0;
-    const safetyWeight = socialAvailable ? 0.35 : 0.40;
-    const smartWeight = socialAvailable ? 0.25 : 0.40;
+    const safetyWeight = socialAvailable ? 0.30 : 0.40;
+    const smartWeight = socialAvailable ? 0.25 : 0.30;
+    const socialWeight = socialAvailable ? 0.15 : 0;
 
     let apeProbability = Math.min(100,
       safety.safetyScore * safetyWeight +
-      social.socialScore * 0.20 +
+      social.socialScore * socialWeight +
       smartMoney.smartMoneyScore * smartWeight +
       devModifier * 12 +
       gradBonus +
