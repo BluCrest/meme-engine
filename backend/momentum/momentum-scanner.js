@@ -158,7 +158,7 @@ async function scanMomentum() {
     if (ageMin > 30) continue;
 
     const mc = pair.fdv || 0;
-    if (mc > 50000) continue;
+    if (mc > 9000) continue;
     const volH1 = pair.volume?.h1 || 0;
     if (volH1 < 50) continue;
 

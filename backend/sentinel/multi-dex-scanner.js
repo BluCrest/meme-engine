@@ -48,7 +48,7 @@ async function scanDexScreener() {
         if (seen.has(addr)) continue;
         seen.add(addr);
         const mc = pair.fdv || 0;
-        if (mc > 3000 || mc < 1000) continue;
+        if (mc > 9000 || mc < 1000) continue;
         const vol = pair.volume?.h24 || 0;
         if (vol < 500) continue;
         const priceChange = pair.priceChange?.h24 || 0;
@@ -68,7 +68,7 @@ async function scanDexScreener() {
 
         if (mcByAddress.has(addr)) {
           const mc = mcByAddress.get(addr);
-          if (mc > 3000 || mc < 1000) continue;
+          if (mc > 9000 || mc < 1000) continue;
           const vol = volByAddress.get(addr) || 0;
           if (vol < 500) continue;
           candidates.push({ addr, symbol: profile.symbol, name: profile.name, mc, volume: vol, dex: profile.dexId || 'unknown', age_min: 999 });
@@ -79,7 +79,7 @@ async function scanDexScreener() {
             const pair = await fetchPair(addr);
             if (!pair) continue;
             const mc = pair.fdv || 0;
-            if (mc > 3000 || mc < 1000) continue;
+            if (mc > 9000 || mc < 1000) continue;
             const vol = pair.volume?.h24 || 0;
             if (vol < 500) continue;
             const priceChange = pair.priceChange?.h24 || 0;
