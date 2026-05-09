@@ -24,9 +24,20 @@ async function pollUpdates() {
           await handleCallback(update.callback_query);
         } else if (update.message) {
           await handleUpdate({ message: update.message });
-        }
-      }
     }
+  }
+
+  if (text === '/resume') {
+    try {
+      const db = require('../database/db');
+      await db.getDb().collection('stop_losses').deleteMany({});
+      console.log('[Telegram] Circuit breaker reset via /resume');
+      await sendTelegram('sendMessage', { chat_id: chatId, text: '✅ *Circuit breaker cleared* — new buys resumed\n\nStop-loss history wiped. Bot will start buying again on next scan cycle.', parse_mode: 'Markdown' });
+    } catch (e) {
+      await sendTelegram('sendMessage', { chat_id: chatId, text: '❌ Failed to reset: ' + e.message });
+    }
+  }
+}
   } catch (e) {
     console.log('[TG Poll] fetch error:', e.message);
   }
@@ -55,6 +66,7 @@ async function registerCommands() {
         { command: 'pnl', description: 'P&L summary' },
         { command: 'trades', description: 'Recent trades' },
         { command: 'papertrading', description: 'Toggle paper trading on/off' },
+        { command: 'resume', description: 'Clear circuit breaker, resume buys' },
         { command: 'help', description: 'All commands' },
       ]
     });
@@ -409,7 +421,7 @@ async function handleUpdate(update) {
 🎯 *Win Rate:* ${winRate.toFixed(0)}% (${wins}W / ${losses}L)
 📉 *Stop-Losses:* ${slCount} total (${todaySl} today)
 💵 *Net P&L:* ${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(4)} SOL
-${cb.stopTrading ? '\n🔴 *TRADING PAUSED* — ' + cb.reason : ''}
+${cb.stopTrading ? '\n🟡 *NEW BUYS PAUSED* — ' + cb.reason + '\n_Existing positions still managed (stop-losses, exits active)_\nUse /resume to clear' : ''}
 
 ━━━━━━━━━━━━━━━━━━━━
 Use /portfolio for balance, /positions for open trades`;
@@ -489,12 +501,13 @@ Use /portfolio for balance, /positions for open trades`;
 /pnl - P&L summary
 /trades - Recent trade history
 /papertrading [on|off] - Toggle paper trading mode (no real tx)
+/resume - Clear circuit breaker, resume new buys
 /help - This message
 
 ⚡ Momentum: scans every 60s, buys volume spikes + buy pressure, 1.5x target, trailing stop, -30% hard stop.
 👥 Copy Trader: tracks profitable wallets from GMGN ranking + deployer performance. Auto-buys when known-good wallets launch.
 📊 Legacy: scores ≥65% alert, top 2 auto-bought, pattern memory + adaptive weights.
-Stops after 3 consecutive losses or daily loss limit.`,
+Circuit breaker: pauses new buys after 3 consecutive losses or daily loss limit. Use /resume to clear.`,
       parse_mode: 'Markdown'
     });
   }

@@ -241,14 +241,16 @@ async function checkCircuitBreakers() {
     return results;
   }
 
-  // Consecutive losses
+  // Consecutive losses — auto-resets after 30 minutes without a new stop-loss
   const recentLosses = await db.getDb().collection('stop_losses').find()
     .sort({ stopped_at: -1 }).limit(CONSECUTIVE_LOSS_LIMIT).toArray();
   if (recentLosses.length >= CONSECUTIVE_LOSS_LIMIT) {
     const allRecent = recentLosses.every(l => l.pnl_pct < -20);
-    if (allRecent) {
+    const newest = recentLosses[0];
+    const newestAge = newest ? (Date.now() - new Date(newest.stopped_at).getTime()) / 60000 : 0;
+    if (allRecent && newestAge < 30) {
       results.stopTrading = true;
-      results.reason = `${CONSECUTIVE_LOSS_LIMIT} consecutive losses — trading paused`;
+      results.reason = `${CONSECUTIVE_LOSS_LIMIT} consecutive losses — new buys paused (auto-resets in ${(30 - newestAge).toFixed(0)}m)`;
       return results;
     }
   }
