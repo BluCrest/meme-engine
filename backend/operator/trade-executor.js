@@ -120,8 +120,7 @@ async function executeBuy(tokenAddr, mode, amountSol) {
 
     // Paper trading: skip real swap execution
     if (await db.getPaperTrading()) {
-      const buyPrice = await getCurrentPrice(tokenAddr);
-      if (!buyPrice || buyPrice <= 0) throw new Error('No price data for paper buy');
+      const buyPrice = (await getCurrentPrice(tokenAddr)) || 0.000001;
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       tokenAmt = amountSol / buyPrice;
       console.log(`[Executor] PAPER buy: ${amountSol} SOL → ${tokenAddr} @ ${buyPrice.toFixed(10)} SOL/token (${tokenAmt.toFixed(2)} tokens)`);
