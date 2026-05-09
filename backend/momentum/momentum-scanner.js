@@ -1,5 +1,6 @@
 const { fetchDexVolume, fetchAllNewTokens, fetchSearchPairs } = require('../sources/source-rotator');
 const copyTrader = require('../agents/copy-trader');
+const { isRecentlySold } = require('./momentum-trader');
 
 const SCAN_INTERVAL = 15000; // 15s for near-instant sniping
 
@@ -94,9 +95,13 @@ async function scanMomentum() {
     const resolvedSymbol = profile.symbol || paprika.symbol || '?';
     const resolvedName = profile.name || paprika.baseToken || '';
 
-    // 0-txn tokens: add to short cooldown instead of permanent seenTokens
+    // 0-txn tokens: first time gets 60s grace, then moves to 10min seenTokens
     if (paprika.txns5m === 0) {
-      zeroTxnCooldown.set(addr, Date.now());
+      if (zeroTxnCooldown.has(addr)) {
+        seenTokens.set(addr, Date.now()); // still dead after grace — check again in 10min
+      } else {
+        zeroTxnCooldown.set(addr, Date.now()); // first check — give 60s for first txns
+      }
       continue;
     }
 
@@ -140,12 +145,17 @@ async function scanMomentum() {
 
   // PATH 2: Search API — finds active pairs already trading
   const pairs = await fetchSearchPairs();
-  for (const pair of (pairs || []).slice(0, 30)) {
+  for (const pair of (pairs || []).slice(0, 10)) {
     const addr = pair.baseToken?.address;
     if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
     if (isKnownNonMeme(addr)) continue;
     if (seenTokens.has(addr)) continue;
+    if (isRecentlySold(addr)) continue;
     seenTokens.set(addr, Date.now());
+
+    // Skip tokens older than 30 min — focus on fresh launches
+    const ageMin = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 60000 : 0;
+    if (ageMin > 30) continue;
 
     const mc = pair.fdv || 0;
     if (mc > 50000) continue;
@@ -154,6 +164,10 @@ async function scanMomentum() {
 
     const paprika = await fetchDexVolume(addr);
     if (!paprika || paprika.txns5m < 2) continue;
+
+    // Check existing positions before triggering
+    const existingPos = [...require('./momentum-trader').activePositions.values()].find(p => p.tokenAddress === addr);
+    if (existingPos) continue;
 
     const momentum = checkMomentum(addr, paprika);
     if (momentum) {

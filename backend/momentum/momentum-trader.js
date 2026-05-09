@@ -20,6 +20,20 @@ const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 let activePositions = new Map();
 const snipePending = new Set();
+const recentlySold = new Map(); // addr -> timestamp (30 min TTL)
+const RECENTLY_SOLD_TTL = 1800000;
+
+function markRecentlySold(addr) {
+  recentlySold.set(addr, Date.now());
+  setTimeout(() => recentlySold.delete(addr), RECENTLY_SOLD_TTL);
+}
+
+function isRecentlySold(addr) {
+  const ts = recentlySold.get(addr);
+  if (!ts) return false;
+  if (Date.now() - ts > RECENTLY_SOLD_TTL) { recentlySold.delete(addr); return false; }
+  return true;
+}
 
 // Performance tracker per trigger type — learn from wins/losses
 const triggerStats = new Map(); // triggerType -> { wins, losses, total }
@@ -143,6 +157,7 @@ async function executeMomentumSell(tokenAddress, reason) {
   } catch (e) {
     console.error(`[Momentum] Sell failed ${pos.symbol}:`, e.message);
   }
+  markRecentlySold(tokenAddress);
   copyTrader.finalizeToken(tokenAddress, 0);
   activePositions.delete(tokenAddress);
 }
@@ -383,4 +398,4 @@ function getTriggerStats() {
   return out;
 }
 
-module.exports = { startMomentumTrader, handleMomentumTrigger, activePositions, getTriggerStats };
+module.exports = { startMomentumTrader, handleMomentumTrigger, activePositions, getTriggerStats, isRecentlySold };
