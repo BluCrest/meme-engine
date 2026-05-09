@@ -88,9 +88,6 @@ async function stopLossCheck(position, currentPrice) {
 async function processExitsForPosition(position) {
   const chatId = config.telegram.chatId;
   try {
-    // Paper trading: skip all stop-loss / exit rules
-    if (await db.getPaperTrading()) return;
-
     const currentPrice = await getCurrentPrice(position.token_address);
     if (!currentPrice) return;
 

@@ -2,13 +2,22 @@ const db = require('../database/db');
 
 const priceCache = new Map();
 const CACHE_TTL = 120000; // 2 min cache
+let lastDexCall = 0;
+
+async function rateLimitedFetch(url) {
+  const now = Date.now();
+  const gap = now - lastDexCall;
+  if (gap < 600) await new Promise(r => setTimeout(r, 600 - gap));
+  lastDexCall = Date.now();
+  return fetch(url);
+}
 
 async function getCurrentPrice(tokenAddress) {
   const cached = priceCache.get(tokenAddress);
   if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.price;
 
   try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
     const data = await res.json();
 
     const pair = data.pairs?.[0];
@@ -38,7 +47,7 @@ async function getCurrentPrice(tokenAddress) {
  */
 async function getCurrentMC(tokenAddress) {
   try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
     const data = await res.json();
     const pair = data.pairs?.[0];
     return pair ? parseFloat(pair.fdv) || 0 : 0;
@@ -73,7 +82,7 @@ async function getPriceAt(tokenAddress, timestamp) {
  */
 async function getTokenSymbol(tokenAddress) {
   try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
     const data = await res.json();
     return data.pairs?.[0]?.baseToken?.symbol || 'UNKNOWN';
   } catch (err) {
@@ -86,7 +95,7 @@ async function getTokenSymbol(tokenAddress) {
  */
 async function getTokenName(tokenAddress) {
   try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
     const data = await res.json();
     return data.pairs?.[0]?.baseToken?.name || 'Unknown';
   } catch (err) {
@@ -96,7 +105,7 @@ async function getTokenName(tokenAddress) {
 
 async function getTokenProfile(tokenAddress) {
   try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    const res = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
     const data = await res.json();
     const pair = data.pairs?.[0];
     if (!pair) return null;

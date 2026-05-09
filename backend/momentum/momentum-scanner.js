@@ -119,7 +119,7 @@ async function scanMomentum() {
   const profiles = await fetchTokenProfiles();
   for (const profile of (profiles || []).slice(0, 50)) {
     const addr = profile.tokenAddress;
-    if (!addr || addr.length < 32 || addr.length > 44) continue;
+    if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
     if (isKnownNonMeme(addr)) continue;
     if (seenTokens.has(addr)) continue;
     if (zeroTxnCooldown.has(addr)) continue;
@@ -180,7 +180,7 @@ async function scanMomentum() {
   const pairs = await fetchSearchPairs();
   for (const pair of (pairs || []).slice(0, 30)) {
     const addr = pair.baseToken?.address;
-    if (!addr || addr.length < 32 || addr.length > 44) continue;
+    if (!addr || addr.startsWith('0x') || addr.length < 32 || addr.length > 44) continue;
     if (isKnownNonMeme(addr)) continue;
     if (seenTokens.has(addr)) continue;
     seenTokens.set(addr, Date.now());

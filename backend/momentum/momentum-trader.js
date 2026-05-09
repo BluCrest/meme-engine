@@ -44,6 +44,11 @@ async function getBalance() {
 
 async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerType) {
   try {
+    // Reject non-Solana addresses (Ethereum 0x, etc.)
+    if (!tokenAddress || tokenAddress.startsWith('0x') || tokenAddress.length < 30 || tokenAddress.length > 50) {
+      console.log(`[Momentum] ${symbol}: invalid Solana address "${tokenAddress.slice(0, 12)}..." — skipping`);
+      return null;
+    }
     const isPaperTrading = await db.getPaperTrading();
     let solAmount;
     if (isPaperTrading) {
@@ -97,12 +102,14 @@ async function executeMomentumSell(tokenAddress, reason) {
       const emoji = pnl > 0 ? '✅' : '❌';
       console.log(`[Momentum] ${pos.symbol}: SOLD (${reason}) PnL: ${pnl.toFixed(1)}%`);
       await sendTelegramMessage(`${emoji} *$${pos.symbol}* sold — ${pnl > 0 ? '+' : ''}${pnl.toFixed(1)}% (${(1 + pnl/100).toFixed(2)}x) | ${reason} | Invested: ${pos.solInvested.toFixed(4)} SOL`);
-      copyTrader.finalizeToken(tokenAddress, currentPrice || pos.entryPrice);
-      activePositions.delete(tokenAddress);
+    } else {
+      console.log(`[Momentum] ${pos.symbol}: sell skipped/failed (${reason}) — removing from active positions`);
     }
   } catch (e) {
     console.error(`[Momentum] Sell failed ${pos.symbol}:`, e.message);
   }
+  copyTrader.finalizeToken(tokenAddress, 0);
+  activePositions.delete(tokenAddress);
 }
 
 async function checkPosition(tokenAddress) {
