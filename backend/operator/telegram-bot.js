@@ -18,13 +18,14 @@ async function pollUpdates() {
     const data = await res.json();
     if (!data.ok) {
       if (data.error_code === 409) {
-        pollingBackoff = Date.now() + 60000;
-        console.log('[TG Poll] 409 conflict — another instance is polling, retry in 60s');
+        console.log('[TG Poll] 409 conflict — backoff 30s');
+        pollingBackoff = Date.now() + 30000;
         return;
       }
       console.log('[TG Poll] API error:', data);
       return;
     }
+    pollingBackoff = 0;
     if (data.result?.length) {
       console.log(`[TG Poll] ${data.result.length} update(s), offset=${pollingOffset}`);
       for (const update of data.result) {
