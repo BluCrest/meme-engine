@@ -242,17 +242,15 @@ async function runExitManager() {
   const openPositions = await db.getOpenPositions();
   console.log(`[ExitMgr] Checking ${openPositions.length} open positions...`);
 
-  // Circuit breaker check
-  const cb = await checkCircuitBreakers();
-  if (cb.stopTrading) {
-    console.log(`[ExitMgr] Circuit breaker: ${cb.reason}`);
-    await sendTelegramMessage(config.telegram.chatId, `🔴 *TRADING PAUSED*\n\n${cb.reason}`);
-    return;
-  }
-
   // Low balance check
   const bal = await checkLowBalance();
   console.log(`[ExitMgr] Wallet: ${bal.toFixed(4)} SOL`);
+
+  // Circuit breaker check — warn but DON'T block exits (still need to manage existing positions)
+  const cb = await checkCircuitBreakers();
+  if (cb.stopTrading) {
+    console.log(`[ExitMgr] Circuit breaker active: ${cb.reason} — still managing exits`);
+  }
 
   for (const position of openPositions) {
     await processExitsForPosition(position);

@@ -369,9 +369,12 @@ async function handleUpdate(update) {
     }
     let msg = '📊 *Open Positions*\n\n';
     for (const p of positions) {
-      const currentPrice = await require('../utils/price-feed').getCurrentPrice(p.tokenAddress);
+      const addr = p.token_address;
+      if (!addr) continue;
+      const currentPrice = await require('../utils/price-feed').getCurrentPrice(addr);
       const pnl = p.entry_price > 0 ? ((currentPrice / p.entry_price) - 1) * 100 : 0;
-      msg += `$${p.tokenAddress.slice(0, 8)}... Entry: $${p.entry_price?.toFixed(6)} | Now: $${currentPrice?.toFixed(6)} | P&L: ${pnl.toFixed(1)}%\n`;
+      const ticker = p.symbol || addr.slice(0, 8);
+      msg += `$${ticker} — ${pnl.toFixed(1)}%\n   Entry: $${p.entry_price?.toFixed(8)} | Now: $${currentPrice?.toFixed(8)}\n`;
     }
     await sendTelegram('sendMessage', { chat_id: chatId, text: msg, parse_mode: 'Markdown' });
   }

@@ -170,6 +170,7 @@ async function executeBuy(tokenAddr, mode, amountSol) {
     await db.insertTrade(trade);
     await db.upsertPosition({
       token_address: tokenAddr,
+      symbol,
       entry_price: price,
       entry_mc: mc,
       sol_invested: amountSol,
