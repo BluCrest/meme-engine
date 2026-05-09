@@ -1,83 +1,70 @@
-const config = require('../config');
+// Free social scanner using Google News — no API key needed
+const MENTION_CACHE = {};
 
-let MENTION_CACHE = {};
+async function getGoogleMentions(query, minutesBack = 60) {
+  try {
+    const cacheKey = `g|${query}|${minutesBack}`;
+    const cached = MENTION_CACHE[cacheKey];
+    if (cached && Date.now() - cached.ts < 120000) return cached;
 
-function getAuthHeaders() {
-  const token = config.x?.bearerToken;
-  if (!token) return null;
-  return { Authorization: `Bearer ${token}` };
+    const encoded = encodeURIComponent(query);
+    const res = await fetch(`https://news.google.com/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`, {
+      signal: AbortSignal.timeout(6000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+    if (!res.ok) return { mentions: 0, volume: 0 };
+    const html = await res.text();
+
+    const mentionMatches = html.match(/article|href=["']/gi);
+    const mentionCount = mentionMatches ? Math.min(mentionMatches.length, 50) : 0;
+
+    const result = { mentions: mentionCount, volume: mentionCount };
+    MENTION_CACHE[cacheKey] = { ...result, ts: Date.now() };
+    return result;
+  } catch (_) { return { mentions: 0, volume: 0 }; }
 }
 
 async function getXMentions(query, minutesBack = 60) {
-  try {
-    const cacheKey = `${query}|${minutesBack}`;
-    const cached = MENTION_CACHE[cacheKey];
-    if (cached && Date.now() - cached.ts < 60000) return cached.count;
-
-    const headers = getAuthHeaders();
-    if (!headers) return 0;
-
-    const startTime = new Date(Date.now() - minutesBack * 60000).toISOString();
-    const url = `https://api.twitter.com/2/tweets/search/recent?query=${encodeURIComponent(query)}&max_results=20&tweet.fields=public_metrics,created_at&start_time=${startTime}`;
-
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
-    if (!res.ok) {
-      if (res.status === 429) return 0;
-      return 0;
-    }
-    const data = await res.json();
-
-    const count = data.meta?.result_count || 0;
-    MENTION_CACHE[cacheKey] = { count, ts: Date.now() };
-    return count;
-  } catch (_) { return 0; }
+  const data = await getGoogleMentions(query, minutesBack);
+  return data.mentions;
 }
 
 async function getKOLMentions(query, minutesBack = 60) {
-  try {
-    const headers = getAuthHeaders();
-    if (!headers) return 0;
-
-    const startTime = new Date(Date.now() - minutesBack * 60000).toISOString();
-    const url = `https://api.twitter.com/2/tweets/search/recent?query=${encodeURIComponent(query)}+(followers_count:5000 OR followers_count:10000 OR followers_count:50000)&max_results=20&tweet.fields=public_metrics,author_id&start_time=${startTime}&expansions=author_id&user.fields=public_metrics`;
-
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return 0;
-    const data = await res.json();
-
-    const kolCount = (data.includes?.users || []).filter(u => (u.public_metrics?.followers_count || 0) >= 5000).length;
-    return kolCount;
-  } catch (_) { return 0; }
+  return 0;
 }
 
 async function getXSentiment(query, minutesBack = 60) {
+  const data = await getGoogleMentions(query, minutesBack);
+  if (!data.mentions) return { score: 50, volume: 0 };
+
+  const encoded = encodeURIComponent(query);
+  let bullishCount = 0, bearishCount = 0;
   try {
-    const headers = getAuthHeaders();
-    if (!headers) return { score: 0, volume: 0 };
-
-    const startTime = new Date(Date.now() - minutesBack * 60000).toISOString();
-    const url = `https://api.twitter.com/2/tweets/search/recent?query=${encodeURIComponent(query)}&max_results=50&tweet.fields=public_metrics,created_at,lang&start_time=${startTime}`;
-
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return { score: 0, volume: 0 };
-    const data = await res.json();
-
-    const tweets = data.data || [];
-    const volume = tweets.length;
-
-    let sentimentScore = 50;
-    const bullish = ['moon', 'gem', 'pump', 'buy', 'bullish', 'fomo', 'next', 'giga', 'based', 'wagmi', 'early'];
-    const bearish = ['rug', 'scam', 'dump', 'shit', 'dead', 'bust', 'pnd', 'honeypot', 'safu', 'exit'];
-
-    for (const t of tweets) {
-      const text = (t.text || '').toLowerCase();
-      for (const w of bullish) { if (text.includes(w)) sentimentScore += 2; }
-      for (const w of bearish) { if (text.includes(w)) sentimentScore -= 3; }
+    const res = await fetch(`https://news.google.com/search?q=${encoded}+(moon+OR+pump+OR+gem+OR+explode)&hl=en-US&gl=US`, {
+      signal: AbortSignal.timeout(5000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+    if (res.ok) {
+      const html = await res.text();
+      bullishCount = (html.match(/article/gi) || []).length;
     }
+  } catch (_) {}
 
-    sentimentScore = Math.max(0, Math.min(100, sentimentScore));
-    return { score: sentimentScore, volume };
-  } catch (_) { return { score: 0, volume: 0 }; }
+  try {
+    const res = await fetch(`https://news.google.com/search?q=${encoded}+(rug+OR+scam+OR+dump+OR+crash)&hl=en-US&gl=US`, {
+      signal: AbortSignal.timeout(5000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+    if (res.ok) {
+      const html = await res.text();
+      bearishCount = (html.match(/article/gi) || []).length;
+    }
+  } catch (_) {}
+
+  const total = bullishCount + bearishCount;
+  const score = total > 0 ? Math.round((bullishCount / total) * 100) : 50;
+
+  return { score, volume: data.volume };
 }
 
 module.exports = { getXMentions, getKOLMentions, getXSentiment };
