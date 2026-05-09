@@ -220,8 +220,10 @@ async function executeSell(tokenAddr, sellRatio, reason) {
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       const price = currentPrice || pos.entry_price || 0.0001;
       sellAmt = ((pos.sol_invested || 0.01) / (pos.entry_price || 0.0001) * sellRatio);
-      solVal = sellAmt * price * 0.95;
-      console.log(`[Executor] PAPER sell: ${sellAmt.toFixed(2)} tokens @ ${price.toFixed(10)} SOL → ${solVal.toFixed(6)} SOL (sig: ${sig})`);
+      // No slippage when there's no real price data — paper can't fake a loss on a token that never moved
+      const slippage = currentPrice ? 0.95 : 1.0;
+      solVal = sellAmt * price * slippage;
+      console.log(`[Executor] PAPER sell: ${sellAmt.toFixed(2)} tokens @ ${price.toFixed(10)} SOL → ${solVal.toFixed(6)} SOL (sig: ${sig}, slippage: ${((1 - slippage) * 100).toFixed(0)}%)`);
     } else {
     const ata = await getAssociatedTokenAddress(mintPubkey, walletKeypair.publicKey);
     let bal = 0;
