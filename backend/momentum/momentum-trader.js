@@ -35,8 +35,34 @@ function isRecentlySold(addr) {
   return true;
 }
 
-// Performance tracker per trigger type — learn from wins/losses
+// Performance tracker per trigger type — learn from wins/losses (persisted to DB)
 const triggerStats = new Map(); // triggerType -> { wins, losses, total }
+
+async function loadTriggerStats() {
+  try {
+    const doc = await db.getDb().collection('settings').findOne({ key: 'triggerStats' });
+    if (doc?.value) {
+      for (const [type, stats] of Object.entries(doc.value)) {
+        triggerStats.set(type, stats);
+      }
+      console.log(`[Momentum] Loaded ${triggerStats.size} trigger types from DB`);
+    }
+  } catch (_) {}
+}
+
+async function saveTriggerStats() {
+  try {
+    const obj = {};
+    for (const [type, stats] of triggerStats) {
+      obj[type] = stats;
+    }
+    await db.getDb().collection('settings').updateOne(
+      { key: 'triggerStats' },
+      { $set: { value: obj, updatedAt: new Date() } },
+      { upsert: true }
+    );
+  } catch (_) {}
+}
 
 function recordTriggerResult(triggerType, pnlPct) {
   if (!triggerType) return;
@@ -45,12 +71,22 @@ function recordTriggerResult(triggerType, pnlPct) {
   s.total++;
   if (pnlPct > 0) s.wins++;
   else s.losses++;
+  saveTriggerStats();
 }
 
 function shouldSkipTrigger(triggerType) {
   const s = triggerStats.get(triggerType);
   if (!s || s.total < 3) return false;
   return s.losses / s.total > 0.75;
+}
+
+function getPositionScale(triggerType) {
+  const s = triggerStats.get(triggerType);
+  if (!s || s.total < 3) return 1.0;
+  const lossRate = s.losses / s.total;
+  if (lossRate > 0.65) return 0.5;
+  if (lossRate > 0.5) return 0.75;
+  return 1.0;
 }
 
 // Buy cooldown: limit buys per rolling hour
@@ -140,6 +176,23 @@ async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerTyp
 async function executeMomentumSell(tokenAddress, reason) {
   const pos = activePositions.get(tokenAddress);
   if (!pos) return;
+
+  // Snipe partial exit: sell 50% on first signal, keep monitoring
+  if (pos.trigger === 'snipe' && !pos.partialSold && reason !== 'replace_for_new_snipe') {
+    try {
+      const { executeSell } = require('../operator/trade-executor');
+      const result = await executeSell(tokenAddress, 0.5, reason + '_partial');
+      if (result && result.success) {
+        pos.partialSold = true;
+        const currentPrice = await getTokenPrice(tokenAddress) || 0;
+        const pnl = pos.entryPrice > 0 ? ((currentPrice / pos.entryPrice) - 1) * 100 : 0;
+        console.log(`[Momentum] ${pos.symbol}: PARTIAL 50% (${reason}) PnL: ${pnl.toFixed(1)}% — watching for confirmation`);
+        await sendTelegramMessage(`⚠️ *$${pos.symbol}* partial sell 50% — ${pnl > 0 ? '+' : ''}${pnl.toFixed(1)}% | ${reason} | Monitoring remaining`);
+        return;
+      }
+    } catch (_) {}
+  }
+
   try {
     const { executeSell } = require('../operator/trade-executor');
     const result = await executeSell(tokenAddress, 1.0, reason);
@@ -147,9 +200,10 @@ async function executeMomentumSell(tokenAddress, reason) {
       const currentPrice = await getTokenPrice(tokenAddress) || 0;
       const pnl = pos.entryPrice > 0 ? ((currentPrice / pos.entryPrice) - 1) * 100 : 0;
       const emoji = pnl > 0 ? '✅' : '❌';
-      console.log(`[Momentum] ${pos.symbol}: SOLD (${reason}) PnL: ${pnl.toFixed(1)}%`);
+      const label = pos.partialSold ? ' REMAINING' : '';
+      console.log(`[Momentum] ${pos.symbol}: SOLD${label} (${reason}) PnL: ${pnl.toFixed(1)}%`);
       const { formatX } = require('../utils/format-x');
-      await sendTelegramMessage(`${emoji} *$${pos.symbol}* sold — ${pnl > 0 ? '+' : ''}${pnl.toFixed(1)}% (${formatX(pnl / 100)}) | ${reason} | Invested: ${pos.solInvested.toFixed(4)} SOL`);
+      await sendTelegramMessage(`${emoji} *$${pos.symbol}* sold${label.toLowerCase()} — ${pnl > 0 ? '+' : ''}${pnl.toFixed(1)}% (${formatX(pnl / 100)}) | ${reason} | Invested: ${pos.solInvested.toFixed(4)} SOL`);
       recordTriggerResult(pos.trigger, pnl / 100);
     } else {
       console.log(`[Momentum] ${pos.symbol}: sell skipped/failed (${reason}) — removing from active positions`);
@@ -373,16 +427,18 @@ async function handleMomentumTrigger(trigger) {
   if (recentSl) return;
   if (activePositions.has(trigger.address)) return;
 
-  // Scale: snipe gets smallest, copy_trade gets largest
+  // Scale: learning-aware position sizing
+  const scale = getPositionScale(trigger.momentum.trigger);
   const pctMap = {
-    snipe: 0.05,       // 5% of wallet for snipes (reduced from 8%)
-    first_activity: 0.10,
-    high_activity: 0.10,
-    buy_pressure: 0.12,
-    strong: 0.15,
-    copy_trade: 0.20
+    snipe: 0.05 * scale,
+    first_activity: 0.10 * scale,
+    high_activity: 0.10 * scale,
+    buy_pressure: 0.12 * scale,
+    strong: 0.15 * scale,
+    copy_trade: 0.20 * scale
   };
   const pct = pctMap[trigger.momentum.trigger] || 0.05;
+  if (scale < 1.0) console.log(`[Momentum] ${trigger.symbol}: scaled position ${(scale * 100).toFixed(0)}% (learning: ${trigger.momentum.trigger} has ${triggerStats.get(trigger.momentum.trigger)?.losses || 0} losses)`);
 
   // For snipes: sell existing snipe positions before buying new one
   if (trigger.isSnipe) {
@@ -396,6 +452,7 @@ async function handleMomentumTrigger(trigger) {
 }
 
 async function startMomentumTrader() {
+  await loadTriggerStats();
   console.log('[MomentumTrader] Starting (monitor every 10s)...');
   setInterval(monitorPositions, MONITOR_INTERVAL);
 }
