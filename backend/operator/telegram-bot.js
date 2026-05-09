@@ -410,20 +410,41 @@ async function handleUpdate(update) {
     const { getBalance } = require('./trade-executor');
     const { checkCircuitBreakers } = require('./exit-manager');
     const openPositions = await db.getDb().collection('positions').find({ status: 'open' }).toArray();
-    const closedTrades = await db.getDb().collection('trades').find({ action: 'sell' }).sort({ timestamp: -1 }).toArray();
+    const allTrades = await db.getDb().collection('trades').find().sort({ timestamp: -1 }).toArray();
     const stopLosses = await db.getDb().collection('stop_losses').find().sort({ stopped_at: -1 }).limit(10).toArray();
     const bal = await getBalance();
 
-    let totalInvested = 0, totalReturned = 0, wins = 0, losses = 0;
-    for (const t of closedTrades) {
-      if (t.action === 'sell') {
-        totalInvested += t.sol_amount || 0;
-        totalReturned += t.sol_amount || 0;
-        if ((t.sol_amount || 0) > 0) wins++; else losses++;
+    // Match buys and sells by token_address to compute real PnL
+    const buys = allTrades.filter(t => t.action === 'buy');
+    const sells = allTrades.filter(t => t.action === 'sell');
+    const buyMap = new Map();
+    for (const b of buys) {
+      if (!buyMap.has(b.token_address)) buyMap.set(b.token_address, []);
+      buyMap.get(b.token_address).push(b);
+    }
+
+    let totalInvested = 0, totalReturned = 0, wins = 0, losses = 0, maxProfitTrade = null, maxProfitPct = 0;
+    for (const s of sells) {
+      const addr = s.token_address;
+      const matchedBuys = buyMap.get(addr) || [];
+      // Find the buy that invested into this sell (by matching sol amount range)
+      const buy = matchedBuys.find(b => b.sol_amount && s.sol_amount && Math.abs(b.sol_amount - s.sol_amount) < s.sol_amount * 0.5) || matchedBuys.pop();
+      const investAmount = buy?.sol_amount || 0;
+      const returnAmount = s.sol_amount || 0;
+      totalInvested += investAmount;
+      totalReturned += returnAmount;
+      const profit = returnAmount - investAmount;
+      const pnlPct = investAmount > 0 ? ((returnAmount / investAmount) - 1) * 100 : 0;
+      if (profit >= 0) wins++; else losses++;
+      if (pnlPct > maxProfitPct) {
+        maxProfitPct = pnlPct;
+        maxProfitTrade = { symbol: s.symbol || addr.slice(0, 8), pnlPct, profit };
       }
     }
+
     const netPnl = totalReturned - totalInvested;
-    const winRate = closedTrades.length > 0 ? (wins / (wins + losses)) * 100 : 0;
+    const totalTrades = wins + losses;
+    const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
     const slCount = stopLosses.length;
     const todaySl = stopLosses.filter(s => new Date(s.stopped_at) > new Date(Date.now() - 86400000)).length;
 
@@ -432,10 +453,11 @@ async function handleUpdate(update) {
     let msg = `📈 *P&L Summary*
 ━━━━━━━━━━━━━━━━━━━━
 💰 *Wallet:* ${bal.toFixed(4)} SOL
-📊 *Trades:* ${closedTrades.length} closed | ${openPositions.length} open
+📊 *Trades:* ${sells.length} closed | ${openPositions.length} open
 🎯 *Win Rate:* ${winRate.toFixed(0)}% (${wins}W / ${losses}L)
 📉 *Stop-Losses:* ${slCount} total (${todaySl} today)
 💵 *Net P&L:* ${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(4)} SOL
+${maxProfitTrade ? `🏆 *Best Trade:* $${maxProfitTrade.symbol} — +${maxProfitTrade.pnlPct.toFixed(0)}% (${(1 + maxProfitTrade.pnlPct/100).toFixed(2)}x)` : ''}
 ${cb.stopTrading ? '\n🟡 *NEW BUYS PAUSED* — ' + cb.reason + '\n_Existing positions still managed (stop-losses, exits active)_\nUse /resume to clear' : ''}
 
 ━━━━━━━━━━━━━━━━━━━━
