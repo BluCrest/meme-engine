@@ -49,14 +49,49 @@ async function checkExitRules(position, currentPrice) {
   return null;
 }
 
+async function getExitParams(position) {
+  const params = {
+    trailingTrigger: 0.2,
+    trailingDrawdown: 0.12,
+    stopLossPct: STOP_LOSS_PCT,
+    timeoutMs: 900000,
+  };
+  try {
+    const token = await db.getToken(position.token_address);
+    const devWallet = token?.dev_wallet;
+    if (!devWallet) return params;
+    const { buildDevProfile } = require('../profiler/dev-fingerprint');
+    const dev = await buildDevProfile(devWallet);
+    if (!dev) return params;
+    const rep = dev.reputation_score || 50;
+    const rugRate = dev.totalLaunches > 0 ? (dev.rugCount || 0) / dev.totalLaunches : 0;
+    const avgPeak = dev.avg_return_at_peak || 1;
+    if (rep > 70 && rugRate < 0.3) {
+      params.trailingDrawdown = Math.min(0.25, 0.12 + (rep - 70) / 200);
+      params.trailingTrigger = Math.min(5, Math.max(0.2, avgPeak * 0.4));
+      params.stopLossPct = -0.25;
+    } else if (rugRate > 0.7 || rep < 30) {
+      params.trailingDrawdown = 0.08;
+      params.trailingTrigger = 0.15;
+      params.stopLossPct = -0.15;
+    }
+    if (dev.avg_time_to_rug_hours && dev.avg_time_to_rug_hours > 0) {
+      params.timeoutMs = Math.min(3600000, dev.avg_time_to_rug_hours * 0.75 * 3600000);
+    }
+  } catch (_) {}
+  return params;
+}
+
 async function trailingStopCheck(position, currentPrice) {
   const entryPrice = position.entry_price || 1;
   const pnl = (currentPrice / entryPrice) - 1;
-  if (pnl < 0.2) return null;
+  const ep = await getExitParams(position);
+  if (pnl < ep.trailingTrigger) return null;
   const peakPrice = position.highest_price || currentPrice;
   const drawdownFromPeak = (peakPrice - currentPrice) / peakPrice;
-  if (drawdownFromPeak >= 0.12) {
-    return { triggered: true, reason: 'trailing_stop', message: `🛑 *TRAILING STOP HIT* — Drawdown: ${(drawdownFromPeak * 100).toFixed(0)}% from peak` };
+  if (drawdownFromPeak >= ep.trailingDrawdown) {
+    const label = ep.trailingDrawdown >= 0.2 ? 'loose' : ep.trailingDrawdown <= 0.08 ? 'tight' : 'normal';
+    return { triggered: true, reason: 'trailing_stop', message: `🛑 *TRAILING STOP (${label})* — Drawdown: ${(drawdownFromPeak * 100).toFixed(0)}% from peak` };
   }
   return null;
 }
@@ -75,7 +110,8 @@ async function momentumDivergenceExit(tokenAddress, position, currentPrice) {
 async function stopLossCheck(position, currentPrice) {
   const entryPrice = position.entry_price || 1;
   const pnl = (currentPrice / entryPrice) - 1;
-  if (pnl <= STOP_LOSS_PCT) {
+  const ep = await getExitParams(position);
+  if (pnl <= ep.stopLossPct) {
     return { triggered: true, reason: 'stop_loss', pnl, message: `🛑 *STOP-LOSS HIT* — PnL: ${(pnl * 100).toFixed(0)}% (${formatX(pnl)}) at ${currentPrice.toFixed(6)}` };
   }
   return null;

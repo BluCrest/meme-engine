@@ -163,42 +163,70 @@ async function checkPosition(tokenAddress) {
 
   copyTrader.recordPrice(tokenAddress, currentPrice);
 
+  // Dev-aware params: lookup dev profile to adjust trailing/stop
+  let trailTrigger = TRAILING_TRIGGER, trailPct = TRAILING_PCT, stopLoss = STOP_LOSS, timeoutMs = PAPER_TIMEOUT_MS;
+  try {
+    const token = await db.getToken(tokenAddress);
+    const devWallet = token?.dev_wallet;
+    if (devWallet) {
+      const { buildDevProfile } = require('../profiler/dev-fingerprint');
+      const dev = await buildDevProfile(devWallet);
+      if (dev) {
+        const rep = dev.reputation_score || 50;
+        const rugRate = dev.totalLaunches > 0 ? (dev.rugCount || 0) / dev.totalLaunches : 0;
+        const avgPeak = dev.avg_return_at_peak || 1;
+        if (rep > 70 && rugRate < 0.3) {
+          trailPct = Math.min(0.25, 0.12 + (rep - 70) / 200);
+          trailTrigger = Math.min(5, Math.max(0.2, avgPeak * 0.4));
+          stopLoss = -0.25;
+        } else if (rugRate > 0.7 || rep < 30) {
+          trailPct = 0.08;
+          trailTrigger = 0.15;
+          stopLoss = -0.15;
+        }
+        if (dev.avg_time_to_rug_hours && dev.avg_time_to_rug_hours > 0) {
+          timeoutMs = Math.min(3600000, dev.avg_time_to_rug_hours * 0.75 * 3600000);
+        }
+      }
+    }
+  } catch (_) {}
+
   // Paper mode: check exits same as live (trailing stop, stop loss, timeout)
   if (pos.isPaperTrading) {
-    if (pos.peakPrice > pos.entryPrice * (1 + TRAILING_TRIGGER)) {
+    if (pos.peakPrice > pos.entryPrice * (1 + trailTrigger)) {
       const trailDrop = (pos.peakPrice - currentPrice) / pos.peakPrice;
-      if (trailDrop >= TRAILING_PCT) {
-        await executeMomentumSell(tokenAddress, `paper_trail_${(TRAILING_PCT * 100).toFixed(0)}pct`);
+      if (trailDrop >= trailPct) {
+        await executeMomentumSell(tokenAddress, `paper_trail_${(trailPct * 100).toFixed(0)}pct`);
         return;
       }
     }
-    if (pnlPct <= STOP_LOSS) {
-      await executeMomentumSell(tokenAddress, `paper_stop_${(STOP_LOSS * 100).toFixed(0)}pct`);
+    if (pnlPct <= stopLoss) {
+      await executeMomentumSell(tokenAddress, `paper_stop_${(stopLoss * 100).toFixed(0)}pct`);
       return;
     }
-    if (Date.now() - pos.boughtAt > PAPER_TIMEOUT_MS) {
-      await executeMomentumSell(tokenAddress, 'paper_timeout_15m');
+    if (Date.now() - pos.boughtAt > timeoutMs) {
+      await executeMomentumSell(tokenAddress, 'paper_timeout');
       return;
     }
     return;
   }
 
-  // Trailing stop (activated after 1.2x)
-  if (pos.peakPrice > pos.entryPrice * (1 + TRAILING_TRIGGER)) {
+  // Live — trailing stop
+  if (pos.peakPrice > pos.entryPrice * (1 + trailTrigger)) {
     const trailDrop = (pos.peakPrice - currentPrice) / pos.peakPrice;
-    if (trailDrop >= TRAILING_PCT) {
-      await executeMomentumSell(tokenAddress, `trail_${(TRAILING_PCT * 100).toFixed(0)}pct`);
+    if (trailDrop >= trailPct) {
+      await executeMomentumSell(tokenAddress, `trail_${(trailPct * 100).toFixed(0)}pct`);
       return;
     }
   }
   // Hard stop
-  if (pnlPct <= STOP_LOSS) {
-    await executeMomentumSell(tokenAddress, `stop_${(STOP_LOSS * 100).toFixed(0)}pct`);
+  if (pnlPct <= stopLoss) {
+    await executeMomentumSell(tokenAddress, `stop_${(stopLoss * 100).toFixed(0)}pct`);
     return;
   }
   // Timeout
-  if (Date.now() - pos.boughtAt > PAPER_TIMEOUT_MS) {
-    await executeMomentumSell(tokenAddress, 'timeout_15m');
+  if (Date.now() - pos.boughtAt > timeoutMs) {
+    await executeMomentumSell(tokenAddress, 'timeout');
     return;
   }
 }
