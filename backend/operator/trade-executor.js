@@ -1,5 +1,5 @@
 const { Keypair, PublicKey, VersionedTransaction, LAMPORTS_PER_SOL } = require('@solana/web3.js');
-const { getAssociatedTokenAddress, getAccount } = require('@solana/spl-token');
+const { getAssociatedTokenAddress, getAssociatedTokenAddressSync, getAccount } = require('@solana/spl-token');
 const bs58 = require('bs58');
 const config = require('../config');
 const db = require('../database/db');
@@ -190,6 +190,25 @@ async function executeBuy(tokenAddr, mode, amountSol) {
       isPaperTrading: isPaperTrading
     });
     console.log('[Executor] Buy executed:', sig);
+
+    // Verify: check if we actually received tokens
+    if (!isPaperTrading && mode !== 'paper') {
+      try {
+        const { getAccount } = require('@solana/spl-token');
+        const conn = getConnection();
+        const mintPubkey = new PublicKey(tokenAddr);
+        const ata = getAssociatedTokenAddressSync(mintPubkey, walletKeypair.publicKey);
+        const tokenAccount = await getAccount(conn, ata);
+        const receivedTokens = Number(tokenAccount.amount) / 1e6;
+        console.log(`[Executor] ✅ Verified: ${receivedTokens.toFixed(2)} tokens received`);
+        if (receivedTokens < 0.0001) {
+          throw new Error('Token balance too low after buy - possible swap failure');
+        }
+      } catch (verifyErr) {
+        console.error(`[Executor] ⚠️ Verification failed: ${verifyErr.message}`);
+        // Don't fail the buy - just warn
+      }
+    }
 
     // Send buy notification
     const { sendTradeNotification } = require('./telegram-bot');
