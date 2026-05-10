@@ -465,4 +465,103 @@ function getTriggerStats() {
   return out;
 }
 
-module.exports = { startMomentumTrader, handleMomentumTrigger, activePositions, getTriggerStats, isRecentlySold };
+module.exports = { startMomentumTrader, handleMomentumTrigger, handleNewTokenFromListener, activePositions, getTriggerStats, isRecentlySold };
+
+// ── 3-GATE CHECK for WebSocket-discovered tokens ──────────────
+// Called by token-listener.js for every new on-chain Pump.fun token
+// Fast, minimal RPC — designed for speed not depth
+
+async function handleNewTokenFromListener(tokenAddress) {
+  try {
+    const isPaper = await db.getPaperTrading();
+
+    // GATE 1: Dev reputation — pure DB lookup, zero RPC
+    const token = await db.getToken(tokenAddress);
+    const devWallet = token?.dev_wallet || null;
+    if (devWallet) {
+      const { buildDevProfile } = require('../profiler/dev-fingerprint');
+      const devProfile = await buildDevProfile(devWallet);
+      if (devProfile?.label === 'serial_rugger') {
+        console.log(`[Listener] ${tokenAddress.slice(0,8)}... — SKIP: serial rugger dev`);
+        return;
+      }
+      if (devProfile?.rug_count >= 3) {
+        console.log(`[Listener] ${tokenAddress.slice(0,8)}... — SKIP: dev has ${devProfile.rug_count} rugs`);
+        return;
+      }
+      // Attach dev profile data to token for exit manager
+      if (devProfile) {
+        await db.upsertToken({
+          address: tokenAddress,
+          dev_avg_peak_mc: devProfile.avgPeakMC || null,
+          dev_avg_peak_return: devProfile.avg_return_at_peak || null,
+          dev_avg_time_to_rug: devProfile.avg_time_to_rug_hours || null,
+          dev_rug_count: devProfile.rug_count || 0,
+          dev_reputation: devProfile.reputationScore || 50
+        });
+      }
+    }
+
+    // GATE 2: Bonding curve check — 1 RPC call
+    const { findBondingCurvePDA, isOnBondingCurve } = require('../utils/pump-swap');
+    const onCurve = await isOnBondingCurve(tokenAddress);
+    if (!onCurve) {
+      console.log(`[Listener] ${tokenAddress.slice(0,8)}... — SKIP: not on bonding curve`);
+      return;
+    }
+
+    // GATE 3: Any real volume? — 1 DexScreener call
+    const { fetchDexVolume } = require('../sources/source-rotator');
+    const vol = await fetchDexVolume(tokenAddress);
+    const txns = vol?.txns5m || 0;
+    const vol5m = vol?.vol5m || 0;
+
+    if (txns < 1) {
+      console.log(`[Listener] ${tokenAddress.slice(0,8)}... — SKIP: zero transactions yet`);
+      // Re-check once after 30s in case it's just slow to index
+      setTimeout(() => handleNewTokenFromListener(tokenAddress), 30000);
+      return;
+    }
+
+    const symbol = vol?.symbol || token?.symbol || tokenAddress.slice(0, 6);
+    console.log(`[Listener] ✅ ${symbol} PASSED 3 gates — txns:${txns} vol:$${vol5m} — executing buy`);
+
+    // Save symbol
+    await db.upsertToken({ address: tokenAddress, symbol, status: 'triggered' });
+
+    // Position sizing
+    const bal = await getBalance();
+    const solAmount = isPaper ? 0.01 : Math.min(bal * 0.05, bal - MIN_BALANCE_FLOOR);
+
+    if (!isPaper && solAmount < MIN_BUY) {
+      console.log(`[Listener] ${symbol}: balance ${bal.toFixed(4)} SOL too low — skipping`);
+      return;
+    }
+
+    await sendTelegramMessage(
+      `🎯 *New token: $${symbol}*\n` +
+      `Gates: ✅ dev ✅ curve ✅ volume (${txns} txns, $${vol5m.toFixed(0)})\n` +
+      `${isPaper ? '📝 Paper buy: 0.01 SOL' : `💰 Buying: ${solAmount.toFixed(4)} SOL`}`
+    );
+
+    const { executeBuy } = require('../operator/trade-executor');
+    const result = await executeBuy(tokenAddress, 'listener_3gate', solAmount);
+
+    if (result?.success) {
+      const entryPrice = result.trade?.price_at_trade || 0.000001;
+      activePositions.set(tokenAddress, {
+        tokenAddress, symbol,
+        solInvested: solAmount,
+        entryPrice,
+        highestPrice: entryPrice,
+        trigger: 'listener_3gate',
+        openedAt: Date.now()
+      });
+      recordBuy();
+      console.log(`[Listener] Position opened: ${symbol} @ ${entryPrice}`);
+    }
+
+  } catch (err) {
+    console.error('[Listener] 3-gate check error:', tokenAddress, err.message);
+  }
+}
