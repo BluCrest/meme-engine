@@ -502,13 +502,8 @@ async function handleNewTokenFromListener(tokenAddress) {
       }
     }
 
-    // GATE 2: Bonding curve check — 1 RPC call
-    const { findBondingCurvePDA, isOnBondingCurve } = require('../utils/pump-swap');
-    const onCurve = await isOnBondingCurve(tokenAddress);
-    if (!onCurve) {
-      console.log(`[Listener] ${tokenAddress.slice(0,8)}... — SKIP: not on bonding curve`);
-      return;
-    }
+    // GATE 2: Skipped — every token from Pump.fun logs is on the curve by definition
+    // Removing this RPC call eliminates the main source of 429s
 
     // GATE 3: Any real volume? — 1 DexScreener call
     const { fetchDexVolume } = require('../sources/source-rotator');
