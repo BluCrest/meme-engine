@@ -120,31 +120,17 @@ async function ensureATA(userKeypair, tokenMint, tx) {
   const mintPubkey = new PublicKey(tokenMint);
   const ata = getAssociatedTokenAddressSync(mintPubkey, userKeypair.publicKey);
   
-  // Check if ATA already exists
-  const conn = getConn();
-  try {
-    if (conn) {
-      const acc = await conn.getAccountInfo(ata);
-      if (acc) {
-        console.log(`[PumpSwap] ATA exists: ${ata.toString().slice(0,8)}...`);
-        return ata;
-      }
-    }
-  } catch (e) {
-    console.log(`[PumpSwap] ATA check error (may not exist): ${e.message}`);
-  }
-  
-  // Use createAssociatedTokenAccountIdempotentInstruction but add proper keys
-  // This creates the account if it doesn't exist, initializing it properly
+  // Always add the ATA creation - idempotent means it's safe even if it exists
+  // The program handles "if not exists create, if exists do nothing"
   const createAtaIx = createAssociatedTokenAccountIdempotentInstruction(
-    userKeypair.publicKey,  // payer
-    ata,                    // associated token account address
-    userKeypair.publicKey,  // owner
-    mintPubkey              // mint
+    userKeypair.publicKey,
+    ata,
+    userKeypair.publicKey,
+    mintPubkey
   );
   
   tx.add(createAtaIx);
-  console.log(`[PumpSwap] Adding ATA creation instruction: ${ata.toString().slice(0,8)}...`);
+  console.log(`[PumpSwap] Added ATA create idempotent instruction`);
   return ata;
 }
 
