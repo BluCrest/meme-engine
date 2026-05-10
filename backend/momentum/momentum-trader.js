@@ -508,8 +508,10 @@ async function handleNewTokenFromListener(tokenAddress) {
     // GATE 3: On-chain bonding curve check — pure RPC, no API needed
     // Reads virtualSolReserves + realSolReserves directly from chain
     // realSolReserves > 0 means real buys have happened
+    console.log(`[Listener] ${tokenAddress.slice(0,8)}... — checking bonding curve...`);
     const { readBondingCurveState } = require('../sources/pump-fun');
     const curveState = await readBondingCurveState(tokenAddress);
+    console.log(`[Listener] ${tokenAddress.slice(0,8)}... — curve state:`, curveState ? `progress=${curveState.progress.toFixed(1)}%, hasActivity=${curveState.hasRealActivity}` : 'NULL');
 
     if (!curveState) {
       // Bonding curve account doesn't exist yet — token just created, retry in 10s

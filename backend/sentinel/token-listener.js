@@ -88,7 +88,6 @@ function connect() {
     console.error('[Listener] WebSocket error:', err.message);
   });
 
-  // FIX: Auto-reconnect — old code had no reconnect, one drop = dead forever
   ws.on('close', (code, reason) => {
     console.log(`[Listener] WebSocket closed (${code}) — reconnecting in 5s...`);
     if (reconnectTimer) clearTimeout(reconnectTimer);
