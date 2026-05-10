@@ -1,5 +1,5 @@
 const { PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
-const { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, createInitializeAccountInstruction, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const { executeWithFallback, getConnection } = require('./rpc-rotator');
 const crypto = require('crypto');
 const config = require('../config');
@@ -119,16 +119,40 @@ function toBufferLE(num, bytes) {
 async function ensureATA(userKeypair, tokenMint, tx) {
   const mintPubkey = new PublicKey(tokenMint);
   const ata = getAssociatedTokenAddressSync(mintPubkey, userKeypair.publicKey);
+  
+  // Check if ATA already exists
   try {
     const conn = getConn();
     if (conn) {
       const acc = await conn.getAccountInfo(ata);
-      if (acc) return ata;
+      if (acc) {
+        console.log(`[PumpSwap] ATA exists: ${ata.toString().slice(0,8)}...`);
+        return ata;
+      }
     }
-  } catch {}
-  tx.add(createAssociatedTokenAccountIdempotentInstruction(
-    userKeypair.publicKey, ata, userKeypair.publicKey, mintPubkey
-  ));
+  } catch (e) {
+    console.log(`[PumpSwap] ATA check failed: ${e.message}`);
+  }
+  
+  // If not exists, create it via System Program (simpler, avoids ATA program issues)
+  // Create ATA account
+  const ataSpace = 165; // ATA account size
+  const rent = await conn.getMinimumBalanceForRentExemption(ataSpace);
+  
+  const createAtaIx = SystemProgram.createAccount({
+    fromPubkey: userKeypair.publicKey,
+    newAccountPubkey: ata,
+    lamports: rent,
+    space: ataSpace,
+    programId: TOKEN_PROGRAM_ID, // Token program will initialize it
+  });
+  tx.add(createAtaIx);
+  
+  // Then initialize it
+  const initIx = createInitializeAccountInstruction(ata, mintPubkey, userKeypair.publicKey);
+  tx.add(initIx);
+  
+  console.log(`[PumpSwap] Creating new ATA: ${ata.toString().slice(0,8)}...`);
   return ata;
 }
 
