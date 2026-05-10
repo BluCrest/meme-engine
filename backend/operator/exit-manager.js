@@ -307,22 +307,6 @@ async function processExitsForPosition(position) {
       }
     }
 
-    // 7. Exit Rules (scaling sells) — sell ONE tier per cycle, continue monitoring
-    const exitRule = await checkExitRules(position, currentPrice);
-    if (exitRule) {
-      await executeSell(position.token_address, exitRule.rule.sellRatio, `exit_rule_${exitRule.rule.pnlThreshold}`);
-      await db.markExitTierHit(position._id, exitRule.rule.pnlThreshold);
-      position[`sold_${exitRule.rule.pnlThreshold}`] = true; // prevent re-trigger same cycle
-      await sendTelegramMessage(chatId, `${exitRule.message}`);
-    }
-
-    // 8. Trailing Stop
-    const trailing = await trailingStopCheck(position, currentPrice, ep);
-    if (trailing) {
-      await executeSell(position.token_address, 1.0, trailing.reason);
-      await sendTelegramMessage(chatId, trailing.message);
-    }
-
   } catch (err) {
     console.error(`[ExitMgr] Error processing ${position.token_address}:`, err.message);
   }
