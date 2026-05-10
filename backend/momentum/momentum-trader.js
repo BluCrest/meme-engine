@@ -505,20 +505,78 @@ async function handleNewTokenFromListener(tokenAddress) {
     // GATE 2: Skipped — every token from Pump.fun logs is on the curve by definition
     // Removing this RPC call eliminates the main source of 429s
 
-    // GATE 3: Any real volume? — 1 DexScreener call
-    const { fetchDexVolume } = require('../sources/source-rotator');
-    const vol = await fetchDexVolume(tokenAddress);
-    const txns = vol?.txns5m || 0;
-    const vol5m = vol?.vol5m || 0;
+    // GATE 3: On-chain bonding curve check — pure RPC, no API needed
+    // Reads virtualSolReserves + realSolReserves directly from chain
+    // realSolReserves > 0 means real buys have happened
+    const { readBondingCurveState } = require('../utils/pump-swap');
+    const curveState = await readBondingCurveState(tokenAddress);
 
-    if (txns < 1) {
-      console.log(`[Listener] ${tokenAddress.slice(0,8)}... — SKIP: zero transactions yet`);
-      // Re-check once after 30s in case it's just slow to index
-      setTimeout(() => handleNewTokenFromListener(tokenAddress), 30000);
+    if (!curveState) {
+      // Bonding curve account doesn't exist yet — token just created, retry in 10s
+      const tokenRec = await db.getToken(tokenAddress);
+      if (!tokenRec?.gate3_retried) {
+        await db.upsertToken({ address: tokenAddress, gate3_retried: true });
+        console.log(`[Listener] ${tokenAddress.slice(0,8)}... — curve not ready, retrying in 10s`);
+        setTimeout(() => handleNewTokenFromListener(tokenAddress), 10000);
+        return;
+      }
+      console.log(`[Listener] ${tokenAddress.slice(0,8)}... — no curve after retry, skipping`);
       return;
     }
 
-    const symbol = vol?.symbol || token?.symbol || tokenAddress.slice(0, 6);
+    if (curveState.complete) {
+      console.log(`[Listener] ${tokenAddress.slice(0,8)}... — SKIP: already graduated to Raydium`);
+      return;
+    }
+
+    // Save curve data for exit manager (graduation progress, creator)
+    await db.upsertToken({
+      address: tokenAddress,
+      dev_wallet: curveState.creator,
+      bonding_curve_progress: curveState.progress,
+      real_sol_in_curve: curveState.realSolReserves
+    });
+
+    // Attach dev wallet to re-run gate 1 if we now have the creator
+    if (curveState.creator && !devWallet) {
+      const { buildDevProfile } = require('../profiler/dev-fingerprint');
+      const freshDev = await buildDevProfile(curveState.creator).catch(() => null);
+      if (freshDev?.label === 'serial_rugger') {
+        console.log(`[Listener] ${tokenAddress.slice(0,8)}... — SKIP: creator is serial_rugger`);
+        return;
+      }
+    }
+
+    const realSol = curveState.realSolReserves;
+    const progress = curveState.progress;
+    console.log(`[Listener] ${tokenAddress.slice(0,8)}... — curve: ${realSol.toFixed(3)} SOL in (${progress.toFixed(1)}% to grad)`);
+
+    // Require at least some real activity — 0.001 SOL = at least one buy happened
+    if (!curveState.hasRealActivity) {
+      const tokenRec2 = await db.getToken(tokenAddress);
+      if (!tokenRec2?.gate3_retried) {
+        await db.upsertToken({ address: tokenAddress, gate3_retried: true });
+        console.log(`[Listener] ${tokenAddress.slice(0,8)}... — no buys yet, retrying in 15s`);
+        setTimeout(() => handleNewTokenFromListener(tokenAddress), 15000);
+        return;
+      }
+      // Retried and still nothing — skip, not getting traction
+      console.log(`[Listener] ${tokenAddress.slice(0,8)}... — SKIP: no real activity after retry`);
+      return;
+    }
+
+    // Get symbol from Pump.fun API as fallback (not critical)
+    let symbol = token?.symbol;
+    if (!symbol) {
+      try {
+        const pf = require('../sources/pump-fun');
+        const pfData = await pf.fetchTokenData(tokenAddress);
+        symbol = pfData?.symbol || tokenAddress.slice(0, 6);
+        if (pfData?.creator && !curveState.creator) {
+          await db.upsertToken({ address: tokenAddress, dev_wallet: pfData.creator });
+        }
+      } catch (_) { symbol = tokenAddress.slice(0, 6); }
+    }
     console.log(`[Listener] ✅ ${symbol} PASSED 3 gates — txns:${txns} vol:$${vol5m} — executing buy`);
 
     // Save symbol
@@ -535,7 +593,7 @@ async function handleNewTokenFromListener(tokenAddress) {
 
     await sendTelegramMessage(
       `🎯 *New token: $${symbol}*\n` +
-      `Gates: ✅ dev ✅ curve ✅ volume (${txns} txns, $${vol5m.toFixed(0)})\n` +
+      `Gates: ✅ dev ✅ curve ✅ activity (${curveState.realSolReserves.toFixed(3)} SOL in, ${curveState.progress.toFixed(1)}% to grad)\n` +
       `${isPaper ? '📝 Paper buy: 0.01 SOL' : `💰 Buying: ${solAmount.toFixed(4)} SOL`}`
     );
 
