@@ -1,398 +1,45 @@
 const db = require('../database/db');
 const { executeSell } = require('./trade-executor');
-const { sendPnLCard, generatePnLCard } = require('./pnl-card');
-const { checkMomentumDivergence } = require('../detective/momentum-divergence');
-const { areSmartWalletsDumping, checkSmartWalletBalances } = require('../sentinel/wallet-dump-monitor');
-const { checkTokenSellPressure } = require('../sentinel/sell-pressure-monitor');
-const { getXSentiment } = require('../detective/x-scanner');
 const { formatX } = require('../utils/format-x');
 const config = require('../config');
 
-
-// Price cache — prevents hammering RPC on every exit check
-const priceCache = new Map(); // addr -> { price, ts }
-const PRICE_CACHE_TTL = 20000; // 20 seconds
-
-const EXIT_RULES = [
-  { pnlThreshold: 0.5, sellRatio: 0.25, label: 'Took profit at 1.5x (+50%)' },
-  { pnlThreshold: 1.5, sellRatio: 0.25, label: 'Took profit at 2.5x (+150%)' },
-  { pnlThreshold: 4.0, sellRatio: 0.25, label: 'Took profit at 5x (+400%)' },
-  { pnlThreshold: 9.0, sellRatio: 1.0, label: 'Took profit at 10x (+900%)' },
-];
-const STOP_LOSS_PCT = -0.20;
-const LOW_BALANCE_ALERT = 0.02;
-const STOP_LOSS_COOLDOWN_MIN = 10;
-const MAX_DAILY_LOSS_SOL = 0.05;
-const CONSECUTIVE_LOSS_LIMIT = 3;
+const priceCache = new Map();
+const PRICE_CACHE_TTL = 20000;
 
 async function getCurrentPrice(tokenAddress) {
   const cached = priceCache.get(tokenAddress);
-  if (cached && Date.now() - cached.ts < PRICE_CACHE_TTL) {
-    return cached.price;
-  }
-  const pf = require('../utils/price-feed');
-  const price = await pf.getCurrentPrice(tokenAddress);
-  if (price) priceCache.set(tokenAddress, { price, ts: Date.now() });
-  return price;
-}
-
-async function getDevWallet(tokenAddress) {
-  const token = await db.getToken(tokenAddress);
-  return token?.dev_wallet;
-}
-
-async function rugSpeedPredictor(position, devWallet) {
-  if (!devWallet) return null;
-  const devProfile = await db.getDevProfile(devWallet);
-  if (!devProfile || devProfile.label !== 'serial_rugger') return null;
-  if (!devProfile.avg_time_to_rug_hours) return null;
-  const hoursHeld = (Date.now() - new Date(position.opened_at).getTime()) / 3600000;
-  const rugDeadline = devProfile.avg_time_to_rug_hours * 0.85;
-  if (hoursHeld >= rugDeadline) {
-    return { triggered: true, reason: 'rug_speed_predictor', message: `⏱️ *RUG TIMER* — Sold before avg rug window (${devProfile.avg_time_to_rug_hours.toFixed(1)}h)` };
-  }
-  return null;
-}
-
-async function checkExitRules(position, currentPrice) {
-  const entryPrice = position.entry_price || 1;
-  const pnl = entryPrice > 0 ? (currentPrice / entryPrice) - 1 : 0;
-  for (const rule of EXIT_RULES) {
-    if (pnl >= rule.pnlThreshold && !position[`sold_${rule.pnlThreshold}`]) {
-      return { triggered: true, rule, pnl, message: `🎯 *${rule.label}* — PnL: +${(pnl * 100).toFixed(0)}% (${formatX(pnl)})` };
-    }
-  }
-  return null;
-}
-
-async function getExitParams(position) {
-  const params = {
-    trailingTrigger: 0.2,
-    trailingDrawdown: 0.12,
-    stopLossPct: STOP_LOSS_PCT,
-    timeoutMs: 900000,
-    pressureSellOnMedium: false,
-  };
+  if (cached && Date.now() - cached.ts < PRICE_CACHE_TTL) return cached.price;
   try {
-    const token = await db.getToken(position.token_address);
-    const devWallet = token?.dev_wallet;
-    if (!devWallet) return params;
-    const { buildDevProfile } = require('../profiler/dev-fingerprint');
-    const dev = await buildDevProfile(devWallet);
-    if (!dev) return params;
-    const rep = dev.reputation_score || 50;
-    const rugRate = dev.totalLaunches > 0 ? (dev.rugCount || 0) / dev.totalLaunches : 0;
-    const avgPeak = dev.avg_return_at_peak || 1;
-    const entryPrice = position.entry_price || 1;
-    const currentPrice = await getCurrentPrice(position.token_address).catch(() => 0);
-    const currentReturn = currentPrice > 0 ? currentPrice / entryPrice : 0;
-    const hoursHeld = position.opened_at ? (Date.now() - new Date(position.opened_at).getTime()) / 3600000 : 0;
-
-    // Proximity check: if current return is near dev's avg peak return
-    const proximityToPeak = avgPeak > 1 && currentReturn > 0 ? currentReturn / avgPeak : 0;
-    const proximityToRugTime = dev.avg_time_to_rug_hours > 0 && hoursHeld > 0 ? hoursHeld / dev.avg_time_to_rug_hours : 0;
-    const nearPeak = proximityToPeak > 0.7;
-    const nearRugTime = proximityToRugTime > 0.7;
-    const nearExit = nearPeak || nearRugTime;
-
-    // Pattern memory: tighten exits during losing streaks, loosen during winning streaks
-    const patternMemory = require('../agents/pattern-memory');
-    const tightenFactor = patternMemory.getTighteningFactor();
-
-    if (rep > 70 && rugRate < 0.3) {
-      params.trailingDrawdown = Math.min(0.25, 0.12 + (rep - 70) / 200) * (1 / tightenFactor);
-      params.trailingTrigger = Math.min(5, Math.max(0.2, avgPeak * 0.4));
-      params.stopLossPct = Math.max(-0.30, -0.25 * (1 / tightenFactor));
-      if (nearExit) params.pressureSellOnMedium = true;
-    } else if (rugRate > 0.7 || rep < 30) {
-      params.trailingDrawdown = Math.min(0.15, 0.08 * tightenFactor);
-      params.trailingTrigger = 0.15;
-      params.stopLossPct = Math.max(-0.20, -0.15 * (1 / tightenFactor));
-      if (nearExit) params.pressureSellOnMedium = true;
-    } else {
-      params.trailingDrawdown = Math.min(0.15, 0.12 * tightenFactor);
-      params.trailingTrigger = 0.15;
-      if (nearExit) params.pressureSellOnMedium = true;
-    }
-    if (dev.avg_time_to_rug_hours && dev.avg_time_to_rug_hours > 0) {
-      params.timeoutMs = Math.min(3600000, dev.avg_time_to_rug_hours * 0.75 * 3600000);
-    }
-    // Momentum buys: token already pumped before entry, arm trailing sooner
-    if (position.triggered_by === 'momentum') {
-      params.trailingTrigger = Math.min(params.trailingTrigger, 0.1);
-    }
-  } catch (_) {}
-  return params;
+    const pf = require('../utils/price-feed');
+    const price = await pf.getCurrentPrice(tokenAddress);
+    if (price) priceCache.set(tokenAddress, { price, ts: Date.now() });
+    return price || 0;
+  } catch (_) { return 0; }
 }
 
-async function trailingStopCheck(position, currentPrice, ep) {
-  const entryPrice = position.entry_price || 1;
-  const pnl = (currentPrice / entryPrice) - 1;
-  if (!ep) ep = await getExitParams(position);
-  if (pnl < ep.trailingTrigger) return null;
-  const peakPrice = position.highest_price || currentPrice;
-  const drawdownFromPeak = (peakPrice - currentPrice) / peakPrice;
-  if (drawdownFromPeak >= ep.trailingDrawdown) {
-    // Velocity: if the drop happened fast, it's a rug — sell immediately
-    const peakTime = position.peak_reached_at ? new Date(position.peak_reached_at).getTime() : 0;
-    const secondsSincePeak = peakTime > 0 ? (Date.now() - peakTime) / 1000 : 999;
-    const isFlashCrash = secondsSincePeak < 60 && drawdownFromPeak >= ep.trailingDrawdown * 0.6;
-    if (isFlashCrash) {
-      return { triggered: true, reason: 'flash_crash', message: `💥 *FLASH CRASH* — ${(drawdownFromPeak * 100).toFixed(0)}% drop in ${secondsSincePeak.toFixed(0)}s` };
-    }
-    const label = ep.trailingDrawdown >= 0.2 ? 'loose' : ep.trailingDrawdown <= 0.08 ? 'tight' : 'normal';
-    return { triggered: true, reason: 'trailing_stop', message: `🛑 *TRAILING STOP (${label})* — Drawdown: ${(drawdownFromPeak * 100).toFixed(0)}% from peak` };
-  }
-  // Track when peak was reached for velocity detection
-  if (currentPrice > peakPrice * 0.98) {
-    try {
-      await db.getDb().collection('positions').updateOne(
-        { _id: position._id },
-        { $set: { peak_reached_at: new Date() } }
-      );
-    } catch (_) {}
-  }
-  return null;
+const lastChecked = new Map();
+
+function getCheckSchedule(tokenAddress) {
+  const defaults = { sellPressure: 0, devOutflow: 0, walletDump: 0 };
+  return lastChecked.get(tokenAddress) || defaults;
 }
 
-async function momentumDivergenceExit(tokenAddress, position, currentPrice) {
-  const divergence = await checkMomentumDivergence(tokenAddress);
-  if (!divergence.isDivergent) return null;
-  const entryPrice = position.entry_price || 1;
-  const pnl = (currentPrice / entryPrice) - 1;
-  if (pnl > 0) {
-    return { triggered: true, reason: 'divergence_exit', message: `📉 *DIVERGENCE EXIT* — Price up + wallets dumping (Score: ${divergence.divergenceScore.toFixed(0)})` };
-  }
-  return null;
+function updateCheckSchedule(tokenAddress, signal) {
+  const current = getCheckSchedule(tokenAddress);
+  current[signal] = Date.now();
+  lastChecked.set(tokenAddress, current);
 }
 
-async function stopLossCheck(position, currentPrice, ep) {
-  const entryPrice = position.entry_price || 1;
-  const pnl = (currentPrice / entryPrice) - 1;
-  if (!ep) ep = await getExitParams(position);
-  if (pnl <= ep.stopLossPct) {
-    return { triggered: true, reason: 'stop_loss', pnl, message: `🛑 *STOP-LOSS HIT* — PnL: ${(pnl * 100).toFixed(0)}% (${formatX(pnl)}) at ${currentPrice.toFixed(6)}` };
-  }
-  return null;
-}
-
-async function processExitsForPosition(position) {
-  const chatId = config.telegram.chatId;
-  try {
-    if (!position.token_address || position.token_address.startsWith('0x') || position.token_address.length < 30 || position.token_address.length > 50) {
-      await db.getDb().collection('positions').updateOne(
-        { _id: position._id },
-        { $set: { status: 'closed', closed_reason: 'invalid_address' } }
-      );
-      return;
-    }
-    const currentPrice = await getCurrentPrice(position.token_address);
-    // If price is 0, skip price-dependent checks but still process dev/rug checks
-    const priceAvailable = currentPrice > 0;
-
-    if (priceAvailable) {
-      if (currentPrice > (position.highest_price || 0)) {
-        await db.updateHighestPrice(position._id, currentPrice);
-      }
-    }
-
-    const ep = await getExitParams(position);
-
-    // 0. Stop-loss (highest priority — protect capital)
-    if (priceAvailable) {
-      const sl = await stopLossCheck(position, currentPrice, ep);
-      if (sl) {
-        await executeSell(position.token_address, 1.0, sl.reason);
-        await sendTelegramMessage(chatId, sl.message);
-        await recordStopLoss(position, sl.pnl);
-        return;
-      }
-    }
-
-    // 1. Rug Speed Predictor
-    const devWallet = await getDevWallet(position.token_address);
-    const rugCheck = await rugSpeedPredictor(position, devWallet);
-    if (rugCheck) {
-      await executeSell(position.token_address, 1.0, rugCheck.reason);
-      await sendTelegramMessage(chatId, rugCheck.message);
-      return;
-    }
-
-    // 2. Dev wallet outflow: if dev moves SOL or removes LP during position, rug signal
-    try {
-      if (devWallet) {
-        const { checkDevOutflow } = require('../sentinel/dev-outflow-monitor');
-        const devOutflow = await checkDevOutflow(devWallet, position.token_address);
-        if (devOutflow && devOutflow.triggered) {
-          await executeSell(position.token_address, 1.0, devOutflow.reason);
-          await sendTelegramMessage(chatId, devOutflow.message);
-          return;
-        }
-      }
-    } catch (_) {}
-
-    // 3. Onchain sell pressure — always sell 100% in sniper mode
-    const pressureSignals = await checkTokenSellPressure(position.token_address);
-    if (pressureSignals) {
-      const critical = pressureSignals.find(s => s.severity === 'critical');
-      if (critical) {
-        await executeSell(position.token_address, 1.0, critical.reason);
-        await sendTelegramMessage(chatId, critical.message);
-        return;
-      }
-      const high = pressureSignals.find(s => s.severity === 'high');
-      if (high) {
-        await executeSell(position.token_address, 1.0, high.reason);
-        await sendTelegramMessage(chatId, high.message);
-        return;
-      }
-      const medium = pressureSignals.find(s => s.severity === 'medium' && s.triggered);
-      if (medium && !high && !critical) {
-        if (ep.pressureSellOnMedium) {
-          await executeSell(position.token_address, 1.0, medium.reason);
-          await sendTelegramMessage(chatId, `⚡ *EARLY EXIT (near dev peak)* — ${medium.message}`);
-          return;
-        }
-        await sendTelegramMessage(chatId, medium.message + ' — monitoring');
-      }
-    }
-
-    // 4. Wallet dump detection (smart wallets selling the same token)
-    const walletDump = await areSmartWalletsDumping(position.token_address, position.symbol);
-    if (walletDump && walletDump.triggered) {
-      await executeSell(position.token_address, 1.0, walletDump.reason);
-      await sendTelegramMessage(chatId, walletDump.message);
-      return;
-    }
-    const balanceDrop = await checkSmartWalletBalances(position.token_address);
-    if (balanceDrop && balanceDrop.triggered) {
-      await executeSell(position.token_address, 1.0, balanceDrop.reason);
-      await sendTelegramMessage(chatId, balanceDrop.message);
-      return;
-    }
-
-    // 5. X social sentiment check for held tokens
-    if (position.symbol) {
-      try {
-        const sentiment = await getXSentiment(`$${position.symbol}`, 30);
-        if (sentiment.volume >= 5 && sentiment.score < 30) {
-          await sendTelegramMessage(chatId, `🐻 *BEARISH SENTIMENT* on $${position.symbol} (X score: ${sentiment.score}/100) — watching`);
-        }
-      } catch (_) {}
-    }
-
-    // 6. Momentum Divergence Exit — sell 100%, divergence is a strong dump signal
-    if (priceAvailable) {
-      const divergenceExit = await momentumDivergenceExit(position.token_address, position, currentPrice);
-      if (divergenceExit) {
-        await executeSell(position.token_address, 1.0, divergenceExit.reason);
-        await sendTelegramMessage(chatId, divergenceExit.message);
-        return;
-      }
-
-      // 7. Exit Rules (scaling sells) — sell ONE tier per cycle, continue monitoring
-      const exitRule = await checkExitRules(position, currentPrice);
-      if (exitRule) {
-        await executeSell(position.token_address, exitRule.rule.sellRatio, `exit_rule_${exitRule.rule.pnlThreshold}`);
-        await db.markExitTierHit(position._id, exitRule.rule.pnlThreshold);
-        position[`sold_${exitRule.rule.pnlThreshold}`] = true;
-        await sendTelegramMessage(chatId, `${exitRule.message}`);
-      }
-
-      // 8. Trailing Stop
-      const trailing = await trailingStopCheck(position, currentPrice, ep);
-      if (trailing) {
-        await executeSell(position.token_address, 1.0, trailing.reason);
-        await sendTelegramMessage(chatId, trailing.message);
-      }
-    }
-
-  } catch (err) {
-    console.error(`[ExitMgr] Error processing ${position.token_address}:`, err.message);
-  }
-}
-
-async function recordStopLoss(position, pnl) {
-  const token = await db.getToken(position.token_address);
-  await db.getDb().collection('stop_losses').insertOne({
-    token_address: position.token_address,
-    symbol: token?.symbol || '',
-    pnl_pct: pnl * 100,
-    entry_price: position.entry_price,
-    sol_invested: position.sol_invested || 0,
-    mode: position.mode || (position.isPaperTrading ? 'paper' : 'real'),
-    stopped_at: new Date(),
-    cooldown_until: new Date(Date.now() + STOP_LOSS_COOLDOWN_MIN * 60 * 1000)
-  });
-  // Record outcome for pattern memory learning
-  try {
-    const patternMemory = require('../agents/pattern-memory');
-    await patternMemory.recordTradeOutcome(position.token_address, pnl * 100, null);
-    const adaptiveWeights = require('../agents/adaptive-weights');
-    const tokenRec = await db.getToken(position.token_address);
-    await adaptiveWeights.recordResult(position.token_address, tokenRec?.ape_probability || 0, pnl * 100);
-  } catch (_) {}
-}
-
-async function checkCircuitBreakers() {
-  const results = { stopTrading: false, reason: '' };
-
-  // Paper trading: no real risk, skip loss-based circuit breakers
-  if (await db.getPaperTrading()) return results;
-
-  // Daily drawdown: sum all REAL stop-losses today (exclude paper mode)
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayLosses = await db.getDb().collection('stop_losses').find({
-    stopped_at: { $gte: today },
-    mode: { $ne: 'paper' }
-  }).toArray();
-  const totalLostToday = todayLosses.reduce((s, l) => s + (l.sol_invested || 0), 0);
-  if (totalLostToday >= MAX_DAILY_LOSS_SOL) {
-    results.stopTrading = true;
-    results.reason = `Daily loss limit hit: ${totalLostToday.toFixed(3)} SOL (max ${MAX_DAILY_LOSS_SOL})`;
-    return results;
-  }
-
-  // Consecutive losses — auto-resets after 30 minutes without a new stop-loss
-  const recentLosses = await db.getDb().collection('stop_losses').find({ mode: { $ne: 'paper' } })
-    .sort({ stopped_at: -1 }).limit(CONSECUTIVE_LOSS_LIMIT).toArray();
-  if (recentLosses.length >= CONSECUTIVE_LOSS_LIMIT) {
-    const allRecent = recentLosses.every(l => l.pnl_pct < -20);
-    const newest = recentLosses[0];
-    const newestAge = newest ? (Date.now() - new Date(newest.stopped_at).getTime()) / 60000 : 0;
-    if (allRecent && newestAge < 30) {
-      results.stopTrading = true;
-      results.reason = `${CONSECUTIVE_LOSS_LIMIT} consecutive losses — new buys paused (auto-resets in ${(30 - newestAge).toFixed(0)}m)`;
-      return results;
-    }
-  }
-
-  return results;
-}
-
-async function checkLowBalance() {
-  const { getBalance } = require('./trade-executor');
-  const bal = await getBalance();
-  if (bal < LOW_BALANCE_ALERT && bal > 0) {
-    const chatId = config.telegram.chatId;
-    await sendTelegramMessage(chatId, `⚠️ *LOW WALLET BALANCE*\n\n${bal.toFixed(4)} SOL remaining.\nDeposit more SOL to continue trading.`);
-  }
-  return bal;
-}
-
-async function isTokenInCooldown(tokenAddress) {
-  const recent = await db.getDb().collection('stop_losses').findOne({
-    token_address: tokenAddress,
-    cooldown_until: { $gt: new Date() }
-  });
-  return !!recent;
+function shouldCheck(tokenAddress, signal, intervalMs) {
+  const schedule = getCheckSchedule(tokenAddress);
+  return Date.now() - (schedule[signal] || 0) > intervalMs;
 }
 
 async function sendTelegramMessage(chatId, text) {
   try {
-    const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
-    await fetch(url, {
+    const token = config.telegram.botToken;
+    if (!token || !chatId) return;
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
@@ -400,45 +47,193 @@ async function sendTelegramMessage(chatId, text) {
   } catch (_) {}
 }
 
-async function runExitManager() {
-  // Clean up old paper stop_losses (no mode field = legacy paper entries)
-  try {
-    const { deletedCount } = await db.getDb().collection('stop_losses').deleteMany({ mode: { $exists: false } });
-    if (deletedCount > 0) console.log(`[ExitMgr] Cleaned ${deletedCount} legacy paper stop-loss entries`);
-  } catch (_) {}
+function getExitParams(token) {
+  const devReputation = token?.dev_reputation || 50;
+  const devRugCount = token?.dev_rug_count || 0;
+  const devTotalLaunches = token?.dev_total_launches || 1;
+  const devRugRate = devTotalLaunches > 0 ? devRugCount / devTotalLaunches : 0.5;
+  const avgPeakReturn = token?.dev_avg_peak_return || 3;
 
-  const openPositions = await db.getOpenPositions();
-  console.log(`[ExitMgr] Checking ${openPositions.length} open positions...`);
-
-  // Low balance check
-  const bal = await checkLowBalance();
-  console.log(`[ExitMgr] Wallet: ${bal.toFixed(4)} SOL`);
-
-  // Circuit breaker check — warn but DON'T block exits (still need to manage existing positions)
-  const cb = await checkCircuitBreakers();
-  if (cb.stopTrading) {
-    console.log(`[ExitMgr] Circuit breaker active: ${cb.reason} — still managing exits`);
+  if (devReputation < 30 || devRugRate > 0.7) {
+    return { stopLossPct: -0.15, trailingTrigger: 0.15, trailingDrawdown: 0.08, devPeakTarget: avgPeakReturn * 0.6 };
   }
+  if (devReputation > 70 && devRugRate < 0.3) {
+    return { stopLossPct: -0.25, trailingTrigger: 0.30, trailingDrawdown: 0.15, devPeakTarget: avgPeakReturn * 0.8 };
+  }
+  return { stopLossPct: -0.20, trailingTrigger: 0.20, trailingDrawdown: 0.12, devPeakTarget: avgPeakReturn * 0.7 };
+}
 
-  for (const position of openPositions) {
-    await processExitsForPosition(position);
+async function checkSellPressureSignal(position) {
+  if (!shouldCheck(position.token_address, 'sellPressure', 120000)) return null;
+  updateCheckSchedule(position.token_address, 'sellPressure');
+  try {
+    const { checkTokenSellPressure } = require('../sentinel/sell-pressure-monitor');
+    const signals = await checkTokenSellPressure(position.token_address);
+    if (!signals?.length) return null;
+    const critical = signals.find(s => s.severity === 'critical' || s.severity === 'high');
+    return critical || null;
+  } catch (_) { return null; }
+}
+
+async function checkDevOutflowSignal(position, devWallet) {
+  if (!devWallet) return null;
+  if (!shouldCheck(position.token_address, 'devOutflow', 300000)) return null;
+  updateCheckSchedule(position.token_address, 'devOutflow');
+  try {
+    const { checkDevOutflow } = require('../sentinel/dev-outflow-monitor');
+    return await checkDevOutflow(devWallet, position.token_address);
+  } catch (_) { return null; }
+}
+
+async function checkWalletDumpSignal(position) {
+  if (!shouldCheck(position.token_address, 'walletDump', 300000)) return null;
+  updateCheckSchedule(position.token_address, 'walletDump');
+  try {
+    const { areSmartWalletsDumping } = require('../sentinel/wallet-dump-monitor');
+    return await areSmartWalletsDumping(position.token_address, position.symbol);
+  } catch (_) { return null; }
+}
+
+async function processExitsForPosition(position) {
+  const chatId = config.telegram.chatId;
+  try {
+    if (!position.token_address ||
+        position.token_address.startsWith('0x') ||
+        position.token_address.length < 30) return;
+
+    const currentPrice = await getCurrentPrice(position.token_address);
+    if (!currentPrice || currentPrice <= 0) return;
+
+    const entryPrice = position.entry_price || 0;
+    if (!entryPrice || entryPrice <= 0) return;
+
+    const pnl = (currentPrice / entryPrice) - 1;
+    const symbol = position.symbol || position.token_address.slice(0, 8);
+
+    if (currentPrice > (position.highest_price || 0)) {
+      await db.getDb().collection('positions').updateOne(
+        { _id: position._id },
+        { $set: { highest_price: currentPrice } }
+      );
+      position.highest_price = currentPrice;
+    }
+
+    const token = await db.getToken(position.token_address);
+    const ep = getExitParams(token);
+    const devWallet = token?.dev_wallet || null;
+
+    // TIER 1: Every cycle (30s) — price-based exits
+
+    // Hard stop loss
+    if (pnl <= ep.stopLossPct) {
+      console.log(`[ExitMgr] STOP LOSS: ${symbol} pnl=${(pnl*100).toFixed(0)}%`);
+      await executeSell(position.token_address, 1.0, 'stop_loss');
+      await sendTelegramMessage(chatId,
+        `🛑 *STOP LOSS: $${symbol}*\nPnL: ${(pnl*100).toFixed(0)}% (${formatX(pnl)})`
+      );
+      return;
+    }
+
+    // Dev peak target — sell 75% when near dev's historical avg peak
+    if (ep.devPeakTarget > 1 && (pnl + 1) >= ep.devPeakTarget && !position.dev_peak_sold) {
+      console.log(`[ExitMgr] DEV PEAK TARGET: ${symbol} at ${(pnl*100).toFixed(0)}%`);
+      await executeSell(position.token_address, 0.75, 'dev_peak_target');
+      await db.getDb().collection('positions').updateOne(
+        { _id: position._id }, { $set: { dev_peak_sold: true } }
+      );
+      await sendTelegramMessage(chatId,
+        `🎯 *DEV PEAK: $${symbol}*\nSold 75% at ${(pnl*100).toFixed(0)}%\nDev avg peak: ${((ep.devPeakTarget-1)*100).toFixed(0)}% — moonbag remains`
+      );
+      return;
+    }
+
+    // Trailing stop
+    const highestPrice = position.highest_price || entryPrice;
+    const gainFromEntry = (highestPrice / entryPrice) - 1;
+    if (gainFromEntry >= ep.trailingTrigger) {
+      const drawdownFromPeak = (highestPrice - currentPrice) / highestPrice;
+      if (drawdownFromPeak >= ep.trailingDrawdown) {
+        console.log(`[ExitMgr] TRAILING STOP: ${symbol} -${(drawdownFromPeak*100).toFixed(0)}% from peak`);
+        await executeSell(position.token_address, 1.0, 'trailing_stop');
+        await sendTelegramMessage(chatId,
+          `📉 *TRAILING STOP: $${symbol}*\nPeak: +${(gainFromEntry*100).toFixed(0)}% → Now: ${(pnl*100).toFixed(0)}%\nDropped ${(drawdownFromPeak*100).toFixed(0)}% from peak`
+        );
+        return;
+      }
+    }
+
+    // Paper timeout
+    const isPaper = await db.getPaperTrading();
+    if (isPaper && position.opened_at) {
+      const ageMs = Date.now() - new Date(position.opened_at).getTime();
+      if (ageMs > 900000) {
+        await executeSell(position.token_address, 1.0, 'paper_timeout');
+        await sendTelegramMessage(chatId,
+          `⏱️ *PAPER TIMEOUT: $${symbol}*\nFinal PnL: ${(pnl*100).toFixed(0)}% (${formatX(pnl)})`
+        );
+        return;
+      }
+    }
+
+    // TIER 2: Every 2 minutes — sell pressure (1 API call)
+    const pressureSignal = await checkSellPressureSignal(position);
+    if (pressureSignal?.triggered) {
+      console.log(`[ExitMgr] SELL PRESSURE: ${symbol} — ${pressureSignal.reason}`);
+      await executeSell(position.token_address, 1.0, pressureSignal.reason);
+      await sendTelegramMessage(chatId, `${pressureSignal.message}\n$${symbol} sold 100%`);
+      return;
+    }
+
+    // TIER 3: Every 5 minutes — dev outflow + wallet dump (RPC)
+    const devOutflow = await checkDevOutflowSignal(position, devWallet);
+    if (devOutflow?.triggered) {
+      console.log(`[ExitMgr] DEV OUTFLOW: ${symbol}`);
+      await executeSell(position.token_address, 1.0, devOutflow.reason);
+      await sendTelegramMessage(chatId, `${devOutflow.message}\n$${symbol} sold 100%`);
+      return;
+    }
+
+    const walletDump = await checkWalletDumpSignal(position);
+    if (walletDump?.triggered) {
+      console.log(`[ExitMgr] WALLET DUMP: ${symbol}`);
+      await executeSell(position.token_address, 1.0, walletDump.reason);
+      await sendTelegramMessage(chatId, `${walletDump.message}\n$${symbol} sold 100%`);
+      return;
+    }
+
+  } catch (err) {
+    console.error('[ExitMgr] Error:', position.token_address, err.message);
+  }
+}
+
+async function runExitManager() {
+  try {
+    const positions = await db.getOpenPositions();
+    if (!positions?.length) return;
+
+    const bal = await (async () => {
+      try { const { getBalance } = require('./trade-executor'); return await getBalance(); }
+      catch (_) { return 0; }
+    })();
+
+    console.log(`[ExitMgr] Checking ${positions.length} open positions... Wallet: ${bal.toFixed(4)} SOL`);
+
+    for (const position of positions) {
+      await processExitsForPosition(position);
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } catch (err) {
+    console.error('[ExitMgr] Run error:', err.message);
   }
 }
 
 let exitInterval;
 function startExitManager() {
-  const interval = (config.config.divergenceCheckInterval || 30) * 1000;
-  exitInterval = setInterval(runExitManager, interval);
-  console.log(`[ExitMgr] Started, checking every ${interval / 1000}s`);
+  exitInterval = setInterval(runExitManager, 10000);
+  console.log('[ExitMgr] Started — 10s cycle | price:10s | sell pressure:2min | dev/wallets:5min');
 }
 
 function stopExitManager() {
   if (exitInterval) clearInterval(exitInterval);
 }
-
-module.exports = {
-  runExitManager, startExitManager, stopExitManager,
-  processExitsForPosition, rugSpeedPredictor, checkExitRules,
-  trailingStopCheck, stopLossCheck, checkCircuitBreakers,
-  checkLowBalance, isTokenInCooldown
-};
+module.exports = { startExitManager, stopExitManager, processExitsForPosition };

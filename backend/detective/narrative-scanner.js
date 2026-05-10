@@ -5,6 +5,11 @@ const REDDIT_SUBS = [
   'https://www.reddit.com/r/memecoins/hot.json?limit=25',
   'https://www.reddit.com/r/SolanaMemeCoins/hot.json?limit=25'
 ];
+const NITTER_URLS = [
+  'https://nitter.net/search?q=pump.fun&f=tweets',
+  'https://nitter.poast.org/search?q=pump.fun&f=tweets',
+  'https://nitter.lqdev.org/search?q=pump.fun&f=tweets'
+];
 
 let trendingKeywords = [];
 let lastFetch = 0;
@@ -56,12 +61,34 @@ async function fetchRedditKeywords() {
   return keywords;
 }
 
+async function fetchNitterKeywords() {
+  const keywords = [];
+  for (const url of NITTER_URLS) {
+    const html = await fetchText(url, 6000);
+    if (!html) continue;
+    const tweets = html.match(/<div class="tweet-content[^"]*"[^>]*>([\s\S]*?)<\/div>/gi) || [];
+    for (const t of tweets.slice(0, 20)) {
+      const text = t.replace(/<[^>]+>/g, '').trim();
+      const extracted = extractKeywordsFromText(text);
+      keywords.push(...extracted);
+    }
+    if (keywords.length > 0) break;
+  }
+  return keywords;
+}
+
 async function refreshKeywords() {
   try {
-    const rss = await fetchText(TRENDS_RSS);
-    const trends = rss ? extractTrendsFromRSS(rss) : [];
-    const reddit = await fetchRedditKeywords();
-    const all = [...trends, ...reddit];
+    const [rss, reddit, nitter] = await Promise.allSettled([
+      fetchText(TRENDS_RSS).then(r => r ? extractTrendsFromRSS(r) : []),
+      fetchRedditKeywords(),
+      fetchNitterKeywords()
+    ]);
+    const all = [
+      ...(rss.status === 'fulfilled' ? rss.value : []),
+      ...(reddit.status === 'fulfilled' ? reddit.value : []),
+      ...(nitter.status === 'fulfilled' ? nitter.value : [])
+    ];
     const freq = {};
     for (const w of all) {
       freq[w] = (freq[w] || 0) + 1;

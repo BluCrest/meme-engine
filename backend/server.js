@@ -304,6 +304,23 @@ db.connect().then(async () => {
   const { startExitManager } = require('./operator/exit-manager');
   startExitManager();
 
+  // Narrative keyword refresh (Google Trends + Reddit + Nitter — free)
+  const { refreshKeywords } = require('./detective/narrative-scanner');
+  refreshKeywords().catch(() => {});
+  setInterval(() => refreshKeywords().catch(() => {}), 300000);
+
+  // Clean slate: remove paper trade data from learning tables
+  try {
+    const db = require('./database/db');
+    await db.getDb().collection('pattern_memory').deleteMany({});
+    await db.getDb().collection('trade_outcomes').deleteMany({});
+    await db.getDb().collection('adaptive_weights').deleteMany({});
+    await db.getDb().collection('trigger_stats').deleteMany({});
+    await db.getDb().collection('trades').deleteMany({ mode: 'paper_trade' });
+    await db.getDb().collection('positions').deleteMany({ isPaperTrading: true });
+    console.log('[Server] Learning tables cleared for fresh real-trade data');
+  } catch (_) {}
+
   // Momentum trader (manages positions opened by token listener)
   const { startMomentumTrader } = require('./momentum/momentum-trader');
   startMomentumTrader();
