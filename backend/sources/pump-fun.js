@@ -8,10 +8,11 @@ async function fetchTokenData(tokenAddress) {
     if (!data) return null;
     const vir = data.virtualTokenReserves || 0;
     const vs = data.virtualSolReserves || 0;
-    const price = vs > 0 && vir > 0 ? vs / vir * 1e9 : 0;
+    const priceInSol = vs > 0 && vir > 0 ? vs / vir * 1e9 : 0;
+    const priceUsd = priceInSol * 150; // ~SOL/USD rate for exit comparison consistency
     const totalSupply = data.totalSupply || 0;
     return {
-      priceUsd: price * 0, // Pump.fun price is in SOL, convert roughly
+      priceUsd,
       fdv: data.fdv || 0,
       liquidityUsd: data.liquidity || 0,
       vol5m: data.volume_5m || 0, vol1h: data.volume_1h || 0, vol24h: data.volume_24h || 0,

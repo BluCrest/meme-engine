@@ -46,7 +46,7 @@ async function pollUpdates() {
 
 function startPolling() {
   if (pollingInterval) return;
-  if (process.env.RENDER === 'true') {
+  if (process.env.RENDER === 'true' && !process.env.ENABLE_POLLING) {
     console.log('[Telegram] Render env detected — using webhook mode, polling disabled');
     return;
   }

@@ -13,7 +13,12 @@ const config = require('../config');
 const priceCache = new Map(); // addr -> { price, ts }
 const PRICE_CACHE_TTL = 20000; // 20 seconds
 
-const EXIT_RULES = [];
+const EXIT_RULES = [
+  { pnlThreshold: 0.5, sellRatio: 0.25, label: 'Took profit at 1.5x (+50%)' },
+  { pnlThreshold: 1.5, sellRatio: 0.25, label: 'Took profit at 2.5x (+150%)' },
+  { pnlThreshold: 4.0, sellRatio: 0.25, label: 'Took profit at 5x (+400%)' },
+  { pnlThreshold: 9.0, sellRatio: 1.0, label: 'Took profit at 10x (+900%)' },
+];
 const STOP_LOSS_PCT = -0.20;
 const LOW_BALANCE_ALERT = 0.02;
 const STOP_LOSS_COOLDOWN_MIN = 10;
@@ -182,21 +187,26 @@ async function processExitsForPosition(position) {
       return;
     }
     const currentPrice = await getCurrentPrice(position.token_address);
-    if (!currentPrice) return;
+    // If price is 0, skip price-dependent checks but still process dev/rug checks
+    const priceAvailable = currentPrice > 0;
 
-    if (currentPrice > (position.highest_price || 0)) {
-      await db.updateHighestPrice(position._id, currentPrice);
+    if (priceAvailable) {
+      if (currentPrice > (position.highest_price || 0)) {
+        await db.updateHighestPrice(position._id, currentPrice);
+      }
     }
 
     const ep = await getExitParams(position);
 
     // 0. Stop-loss (highest priority — protect capital)
-    const sl = await stopLossCheck(position, currentPrice, ep);
-    if (sl) {
-      await executeSell(position.token_address, 1.0, sl.reason);
-      await sendTelegramMessage(chatId, sl.message);
-      await recordStopLoss(position, sl.pnl);
-      return;
+    if (priceAvailable) {
+      const sl = await stopLossCheck(position, currentPrice, ep);
+      if (sl) {
+        await executeSell(position.token_address, 1.0, sl.reason);
+        await sendTelegramMessage(chatId, sl.message);
+        await recordStopLoss(position, sl.pnl);
+        return;
+      }
     }
 
     // 1. Rug Speed Predictor
@@ -272,18 +282,37 @@ async function processExitsForPosition(position) {
     }
 
     // 6. Momentum Divergence Exit — sell 100%, divergence is a strong dump signal
-    const divergenceExit = await momentumDivergenceExit(position.token_address, position, currentPrice);
-    if (divergenceExit) {
-      await executeSell(position.token_address, 1.0, divergenceExit.reason);
-      await sendTelegramMessage(chatId, divergenceExit.message);
-      return;
+    if (priceAvailable) {
+      const divergenceExit = await momentumDivergenceExit(position.token_address, position, currentPrice);
+      if (divergenceExit) {
+        await executeSell(position.token_address, 1.0, divergenceExit.reason);
+        await sendTelegramMessage(chatId, divergenceExit.message);
+        return;
+      }
+
+      // 7. Exit Rules (scaling sells) — sell ONE tier per cycle, continue monitoring
+      const exitRule = await checkExitRules(position, currentPrice);
+      if (exitRule) {
+        await executeSell(position.token_address, exitRule.rule.sellRatio, `exit_rule_${exitRule.rule.pnlThreshold}`);
+        await db.markExitTierHit(position._id, exitRule.rule.pnlThreshold);
+        position[`sold_${exitRule.rule.pnlThreshold}`] = true;
+        await sendTelegramMessage(chatId, `${exitRule.message}`);
+      }
+
+      // 8. Trailing Stop
+      const trailing = await trailingStopCheck(position, currentPrice, ep);
+      if (trailing) {
+        await executeSell(position.token_address, 1.0, trailing.reason);
+        await sendTelegramMessage(chatId, trailing.message);
+      }
     }
 
-    // 7. Exit Rules (scaling sells) — partial, continue checking other risks
+    // 7. Exit Rules (scaling sells) — sell ONE tier per cycle, continue monitoring
     const exitRule = await checkExitRules(position, currentPrice);
     if (exitRule) {
       await executeSell(position.token_address, exitRule.rule.sellRatio, `exit_rule_${exitRule.rule.pnlThreshold}`);
       await db.markExitTierHit(position._id, exitRule.rule.pnlThreshold);
+      position[`sold_${exitRule.rule.pnlThreshold}`] = true; // prevent re-trigger same cycle
       await sendTelegramMessage(chatId, `${exitRule.message}`);
     }
 
