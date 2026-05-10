@@ -131,28 +131,20 @@ async function ensureATA(userKeypair, tokenMint, tx) {
       }
     }
   } catch (e) {
-    console.log(`[PumpSwap] ATA check failed: ${e.message}`);
+    console.log(`[PumpSwap] ATA check error (may not exist): ${e.message}`);
   }
   
-  // If not exists, create it via System Program (simpler, avoids ATA program issues)
-  // Create ATA account
-  const ataSpace = 165; // ATA account size
-  const rent = await conn.getMinimumBalanceForRentExemption(ataSpace);
+  // Use createAssociatedTokenAccountIdempotentInstruction but add proper keys
+  // This creates the account if it doesn't exist, initializing it properly
+  const createAtaIx = createAssociatedTokenAccountIdempotentInstruction(
+    userKeypair.publicKey,  // payer
+    ata,                    // associated token account address
+    userKeypair.publicKey,  // owner
+    mintPubkey              // mint
+  );
   
-  const createAtaIx = SystemProgram.createAccount({
-    fromPubkey: userKeypair.publicKey,
-    newAccountPubkey: ata,
-    lamports: rent,
-    space: ataSpace,
-    programId: TOKEN_PROGRAM_ID, // Token program will initialize it
-  });
   tx.add(createAtaIx);
-  
-  // Then initialize it
-  const initIx = createInitializeAccountInstruction(ata, mintPubkey, userKeypair.publicKey);
-  tx.add(initIx);
-  
-  console.log(`[PumpSwap] Creating new ATA: ${ata.toString().slice(0,8)}...`);
+  console.log(`[PumpSwap] Adding ATA creation instruction: ${ata.toString().slice(0,8)}...`);
   return ata;
 }
 
