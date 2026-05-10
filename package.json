@@ -4,7 +4,9 @@
   "main": "backend/server.js",
   "scripts": {
     "start": "node backend/server.js",
-    "dev": "nodemon backend/server.js"
+    "dev": "nodemon backend/server.js",
+    "python-install": "cd backend/python && python setup.py",
+    "python-start": "cd backend/python && python ai_agent.py serve"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.14",

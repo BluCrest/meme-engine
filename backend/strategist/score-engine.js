@@ -84,6 +84,9 @@ async function computeFinalScore(tokenAddress) {
     }
 
     const devScore = devProfile ? devProfile.reputation_score : 50;
+    const tokenAge = token?.age_minutes || 0;
+    const mc = token?.current_mc || 0;
+    const vol = token?.volume_24h || 0;
 
     const socialAvailable = social.socialScore > 0;
     const narrativeBonus = narrative.score || 0;
@@ -92,6 +95,14 @@ async function computeFinalScore(tokenAddress) {
     const smartWeight = socialAvailable ? 0.15 : 0.20;
     const socialWeight = socialAvailable ? 0.15 : 0;
     const narrativeWeight = narrativeBonus > 0 ? 0.10 : 0;
+
+    const gradBonus = graduationInfo?.progress > 80 ? 8 : graduationInfo?.progress > 50 ? 4 : 0;
+    const mcBonus = mc < 5000 ? 5 : mc < 15000 ? 3 : mc < 40000 ? 1 : 0;
+    const freshnessBonus = tokenAge < 5 ? 5 : tokenAge < 30 ? 3 : 0;
+    const volMcBonus = vol > 0 && mc > 0 ? Math.min(5, Math.log10(vol) / Math.log10(mc + 1) * 3) : 0;
+    const multiSourceBonus = multiVol?.volume_sources > 1 ? 3 : 0;
+    const smConfidenceBonus = smartMoney.smartMoneyCount >= 3 && smartMoney.smartMoneyScore > 50 ? 5 : 0;
+    const velocityBonus = divergenceCheck?.divergenceScore < 30 && divergenceCheck?.divergenceScore > 0 ? 3 : 0;
 
     let apeProbability = Math.min(100,
       safety.safetyScore * safetyWeight +
@@ -135,6 +146,51 @@ async function computeFinalScore(tokenAddress) {
       apeProbability: Math.round(apeProbability),
       tokenAge
     });
+
+    // Agent: Python AI enhancement (if available)
+    let pythonAIResult = null;
+    try {
+      const { analyzeWithPython } = require('../utils/python-ai-bridge');
+      const tokenDataForPython = {
+        safety_score: safety.safetyScore || 50,
+        social_score: social.socialScore || 0,
+        smart_money_score: smartMoney.smartMoneyScore || 0,
+        smart_money_count: smartMoney.smartMoneyCount || 0,
+        dev_reputation: devProfile?.reputation_score || 50,
+        dev_rug_count: devProfile?.rug_count || 0,
+        volume_24h: token?.volume_24h || 0,
+        market_cap: mc,
+        age_minutes: tokenAge,
+        graduation_progress: graduationInfo?.progress || 0,
+        buy_sell_ratio: tokenVitality?.buySellRatio || 0.5,
+        honeypot: safety.honeypot || false,
+        top5_concentration: safety.top5Concentration || 0,
+        bundle_detected: bundleInfo?.bundleDetected || false,
+        is_viral: social.isExponential || false,
+        divergence_score: divergenceCheck?.divergenceScore || 50,
+        is_dead: tokenVitality?.isDead || false
+      };
+      pythonAIResult = await analyzeWithPython(tokenAddress, tokenDataForPython);
+      if (pythonAIResult) {
+        console.log(`[ScoreEngine] Python AI: ape=${pythonAIResult.ape_probability}, signal=${pythonAIResult.signals?.signal}`);
+      }
+    } catch (_) {
+      // Python AI not available, continue with JS-only scoring
+    }
+
+    // Use Python AI result if available and confident
+    if (pythonAIResult?.ape_probability) {
+      // Blend Python AI score with JS score (70/30 in favor of Python if confident)
+      const aiConfidence = pythonAIResult.confidence === 'high' ? 0.7 : (pythonAIResult.confidence === 'medium' ? 0.5 : 0.3);
+      apeProbability = apeProbability * (1 - aiConfidence) + pythonAIResult.ape_probability * aiConfidence;
+
+      if (pythonAIResult.signals?.all_signals) {
+        analysis.key_signals = [...analysis.key_signals, ...pythonAIResult.signals.all_signals];
+      }
+      if (pythonAIResult.signals?.risk_flags) {
+        analysis.red_flags = [...analysis.red_flags, ...pythonAIResult.signals.risk_flags];
+      }
+    }
 
     // Record this evaluation for future learning
     await patternMemory.recordEvaluation(

@@ -508,7 +508,7 @@ async function handleNewTokenFromListener(tokenAddress) {
     // GATE 3: On-chain bonding curve check — pure RPC, no API needed
     // Reads virtualSolReserves + realSolReserves directly from chain
     // realSolReserves > 0 means real buys have happened
-    const { readBondingCurveState } = require('../utils/pump-swap');
+    const { readBondingCurveState } = require('../sources/pump-fun');
     const curveState = await readBondingCurveState(tokenAddress);
 
     if (!curveState) {
@@ -577,7 +577,7 @@ async function handleNewTokenFromListener(tokenAddress) {
         }
       } catch (_) { symbol = tokenAddress.slice(0, 6); }
     }
-    console.log(`[Listener] ✅ ${symbol} PASSED 3 gates — txns:${txns} vol:$${vol5m} — executing buy`);
+    console.log(`[Listener] ✅ ${symbol} PASSED 3 gates — curve: ${curveState.realSolReserves.toFixed(3)} SOL, ${curveState.progress.toFixed(1)}% to grad`);
 
     // Save symbol
     await db.upsertToken({ address: tokenAddress, symbol, status: 'triggered' });

@@ -32,10 +32,14 @@ _${escapeMarkdown(message.substring(0, 300))}_
 ━━━━━━━━━━━━━━━━━━━━
 `;
 
-  const { bot } = require('../operator/telegram-bot');
-
   try {
-    await bot.sendMessage(config.telegram.chatId, msg, { parse_mode: 'MarkdownV2' });
+    const token = config.telegram.botToken;
+    const chatId = config.telegram.chatId;
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'MarkdownV2' })
+    });
     console.log(`[PreLaunch] Alert sent for ${symbol || 'unknown token'}`);
   } catch (err) {
     console.error('[PreLaunch] Alert failed:', err.message);
