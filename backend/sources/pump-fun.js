@@ -1,6 +1,6 @@
 const { PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
 const { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
-const { executeWithFallback, getConnection } = require('./rpc-rotator');
+const { executeWithFallback, getConnection } = require('../utils/rpc-rotator');
 const crypto = require('crypto');
 const config = require('../config');
 
