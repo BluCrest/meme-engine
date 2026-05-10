@@ -369,7 +369,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\n⚡ Momentum sniping active — scans for volume spikes every 60s, auto-buys on buy pressure. Legacy scoring still running for quality plays.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/momentum - Active momentum trades\n/pnl - P&L summary\n/trades - Recent trades\n/buy <addr> - Buy a token\n/sell <addr> - Sell a position\n/learn - Learning stats & weights\n/help - All commands',
+      text: '🚀 *Meme Engine Active!*\n\n⚡ Momentum sniping active — scans for volume spikes every 60s, auto-buys on buy pressure. Legacy scoring still running for quality plays.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/momentum - Active momentum trades\n/report - Per-token P&L breakdown\n/pnl - P&L summary\n/trades - Recent trades\n/buy <addr> - Buy a token\n/sell <addr> - Sell a position\n/learn - Learning stats & weights\n/help - All commands',
       parse_mode: 'Markdown'
     });
   }

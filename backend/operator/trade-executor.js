@@ -120,13 +120,14 @@ async function executeBuy(tokenAddr, mode, amountSol) {
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
 
     // Paper trading: skip real swap execution
-    if (await db.getPaperTrading()) {
+    const isPaper = await db.getPaperTrading();
+    if (isPaper) {
       // getCurrentPrice returns USD — convert to SOL/token for paper math
       const usdPrice = await getCurrentPrice(tokenAddr);
       buyPrice = usdPrice ? usdPrice / SOL_USD_RATE : 0.000001;
       sig = 'paper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       tokenAmt = amountSol / buyPrice;
-      console.log(`[Executor] PAPER buy: ${amountSol} SOL → ${tokenAddr} @ ${buyPrice.toFixed(10)} SOL/token (${tokenAmt.toFixed(2)} tokens)`);
+      console.log(`[Executor] 📝 PAPER buy: ${amountSol} SOL → ${tokenAddr} @ ${buyPrice.toFixed(10)} SOL/token (${tokenAmt.toFixed(2)} tokens)`);
     } else {
     // Check bonding curve FIRST for micro-caps — saves Jupiter API calls
     const { pumpBuy, isOnBondingCurve } = require('../utils/pump-swap');
