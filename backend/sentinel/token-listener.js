@@ -1,115 +1,143 @@
-const { Connection, PublicKey } = require('@solana/web3.js');
 const WebSocket = require('ws');
 const config = require('../config');
 const db = require('../database/db');
-const { computeFinalScore } = require('../strategist/score-engine');
-const { queueScoredToken, sendUrgentAlert } = require('../operator/telegram-bot');
 
 const PUMP_FUN_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
 const processingTokens = new Set();
+let reconnectTimer = null;
+let ws = null;
 
 async function startTokenListener() {
-  const connection = new Connection(config.helius.rpcUrl, 'confirmed');
+  console.log('[Listener] Starting Helius WebSocket listener...');
+  connect();
+}
 
-  console.log('[Sentinel] Listening for new Pump.fun tokens...');
+function connect() {
+  // Build WebSocket URL from Helius RPC URL
+  const rpcUrl = config.helius.rpcUrl || '';
+  const wsUrl = rpcUrl.replace('https://', 'wss://').replace('http://', 'ws://') ||
+    `wss://mainnet.helius-rpc.com/?api-key=${config.helius.apiKey}`;
 
-  // Use Helius WebSocket for real-time token detection
-  try {
-    const wsUrl = config.helius.rpcUrl?.replace('https://', 'wss://') || `wss://mainnet.helius-rpc.com/?api-key=${config.helius.apiKey}`;
-    const ws = new WebSocket(wsUrl);
+  console.log('[Listener] Connecting to:', wsUrl.split('?')[0] + '?api-key=***');
 
-    ws.on('open', () => {
-      console.log('[Sentinel] WebSocket connected');
-      ws.send(JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'logsSubscribe',
-        params: {
-          query: { accounts: [PUMP_FUN_PROGRAM] }
-        }
-      }));
-    });
+  ws = new WebSocket(wsUrl);
 
-    ws.on('message', async (data) => {
-      try {
-        const raw = data.toString();
-        // Skip non-JSON messages (like "Connection established" etc.)
-        if (!raw.startsWith('{') && !raw.startsWith('[')) {
-          return;
-        }
-        const parsed = JSON.parse(raw);
+  ws.on('open', () => {
+    console.log('[Listener] WebSocket connected — subscribing to Pump.fun logs');
 
-        if (parsed.method === 'logsNotification') {
-          const logs = parsed.params?.result?.value?.logs || [];
-          const tokenAddress = extractTokenFromLogs(logs);
+    // FIX: correct logsSubscribe format is { mentions: [programId] }
+    // Old code used { accounts: [...] } which is wrong and never fires
+    ws.send(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'logsSubscribe',
+      params: [
+        { mentions: [PUMP_FUN_PROGRAM] },
+        { commitment: 'processed' }
+      ]
+    }));
+  });
 
-          if (tokenAddress && !processingTokens.has(tokenAddress)) {
-            processingTokens.add(tokenAddress);
-            try {
-              await processNewToken(tokenAddress);
-            } finally {
-              processingTokens.delete(tokenAddress);
-            }
-          }
-        }
-      } catch (err) {
-        // Only log parse errors, not every non-JSON message
-        if (!err.message.includes('Unexpected token')) {
-          console.error('[Sentinel] WebSocket message error:', err.message);
-        }
+  ws.on('message', async (data) => {
+    try {
+      const raw = data.toString();
+      if (!raw.startsWith('{')) return;
+
+      const parsed = JSON.parse(raw);
+
+      // Subscription confirmed
+      if (parsed.id === 1 && parsed.result !== undefined) {
+        console.log('[Listener] Subscribed to Pump.fun logs — subscription ID:', parsed.result);
+        return;
       }
-    });
 
-    ws.on('error', (err) => {
-      console.error('[Sentinel] WebSocket error:', err.message);
-    });
+      if (parsed.method !== 'logsNotification') return;
 
-  } catch (err) {
-    console.error('[Sentinel] Failed to start listener:', err.message);
-  }
+      const logs = parsed.params?.result?.value?.logs || [];
+      const signature = parsed.params?.result?.value?.signature;
+
+      // Only process token creation events
+      const isCreate = logs.some(l =>
+        l.includes('InitializeMint') ||
+        l.includes('MintTo') ||
+        l.includes('Create')
+      );
+      if (!isCreate) return;
+
+      const tokenAddress = extractTokenFromLogs(logs);
+      if (!tokenAddress) return;
+      if (processingTokens.has(tokenAddress)) return;
+
+      processingTokens.add(tokenAddress);
+      console.log(`[Listener] New token detected: ${tokenAddress} (tx: ${signature?.slice(0,8)}...)`);
+
+      // Process async — don't block the WebSocket message loop
+      handleNewToken(tokenAddress).finally(() => {
+        processingTokens.delete(tokenAddress);
+      });
+
+    } catch (err) {
+      if (!err.message?.includes('Unexpected token')) {
+        console.error('[Listener] Message error:', err.message);
+      }
+    }
+  });
+
+  ws.on('error', (err) => {
+    console.error('[Listener] WebSocket error:', err.message);
+  });
+
+  // FIX: Auto-reconnect — old code had no reconnect, one drop = dead forever
+  ws.on('close', (code, reason) => {
+    console.log(`[Listener] WebSocket closed (${code}) — reconnecting in 5s...`);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, 5000);
+  });
 }
 
 function extractTokenFromLogs(logs) {
   for (const log of logs) {
-    const match = log.match(/Initialize.*(?:mint|token):\s*([A-Za-z0-9]{32,44})/i);
-    if (match) return match[1];
+    // Pattern 1: "mint: <address>"
+    const mintMatch = log.match(/mint:\s*([A-HJ-NP-Za-km-z1-9]{32,44})/);
+    if (mintMatch) return mintMatch[1];
+
+    // Pattern 2: "Initialize" followed by address
+    const initMatch = log.match(/Initialize[^:]*:\s*([A-HJ-NP-Za-km-z1-9]{32,44})/i);
+    if (initMatch) return initMatch[1];
+
+    // Pattern 3: any 44-char base58 string in a Create log
+    if (log.includes('Create')) {
+      const b58Match = log.match(/[A-HJ-NP-Za-km-z1-9]{44}/);
+      if (b58Match && b58Match[0] !== PUMP_FUN_PROGRAM) return b58Match[0];
+    }
   }
   return null;
 }
 
-async function processNewToken(tokenAddress) {
+async function handleNewToken(tokenAddress) {
   try {
-    console.log(`[Sentinel] New token detected: ${tokenAddress}`);
-
+    // Skip if already in DB
     const existing = await db.getToken(tokenAddress);
-    if (existing) {
-      console.log('[Sentinel] Token already tracked, skipping.');
-      return;
-    }
+    if (existing) return;
 
-    // Save token
+    // Save immediately so other processes don't double-process
     await db.upsertToken({
       address: tokenAddress,
       status: 'new',
       created_at: new Date()
     });
 
-    console.log(`[Sentinel] Token ${tokenAddress} saved. Computing score...`);
+    // Wait 8 seconds — let the first real transactions land
+    // This gives DexScreener time to index it so we can get volume data
+    await new Promise(r => setTimeout(r, 8000));
 
-    // Compute score and alert
-    const result = await computeFinalScore(tokenAddress);
-
-    if (result.apeProbability >= 50) {
-      const token = await db.getToken(tokenAddress);
-      if (result.apeProbability >= 75) {
-        await sendUrgentAlert(token, result);
-      }
-      queueScoredToken(token, result);
-    }
+    // Now hand off to the momentum trader for the 3-gate check
+    const { handleNewTokenFromListener } = require('../momentum/momentum-trader');
+    await handleNewTokenFromListener(tokenAddress);
 
   } catch (err) {
-    console.error('[Sentinel] Error processing new token:', err.message);
+    console.error('[Listener] Error handling token:', tokenAddress, err.message);
   }
 }
 
