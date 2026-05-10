@@ -205,9 +205,17 @@ async function pumpBuy(userKeypair, tokenMint, solAmount, opts = {}) {
   const conn = getConn();
   tx.recentBlockhash = (await conn.getLatestBlockhash('confirmed')).blockhash;
 
-  const sig = await conn.sendTransaction(tx, [userKeypair], { maxRetries: 3 });
-  await conn.confirmTransaction(sig, 'confirmed');
-  return { signature: sig, tx };
+  console.log(`[PumpSwap] Sending buy tx: ${solAmount} SOL for ${tokenMint}`);
+  console.log(`[PumpSwap] Keys: ${keys.length}, Program: ${PUMP_PROGRAM_ID.toString()}`);
+
+  try {
+    const sig = await conn.sendTransaction(tx, [userKeypair], { maxRetries: 3, preflightCommitment: 'confirmed' });
+    await conn.confirmTransaction(sig, 'confirmed');
+    return { signature: sig, tx };
+  } catch (err) {
+    console.error(`[PumpSwap] Buy failed: ${err.message}`);
+    throw err;
+  }
 }
 
 async function pumpSell(userKeypair, tokenMint, tokenAmount) {
