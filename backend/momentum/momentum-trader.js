@@ -159,6 +159,7 @@ async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerTyp
         boughtAt: Date.now(),
         trigger: triggerType,
         isPaperTrading,
+        quickProfitTaken: false,
       };
       activePositions.set(tokenAddress, position);
       recordBuy();
@@ -307,6 +308,22 @@ async function checkPosition(tokenAddress) {
   }
   // Track peak timestamp for velocity detection
   if (currentPrice > pos.peakPrice * 0.98) pos.peakReachedAt = Date.now();
+
+  // FAST EXIT: 15%+ gain within 3 minutes = rapid momentum, take partial profit
+  const minutesSinceBuy = (Date.now() - pos.boughtAt) / 60000;
+  if (minutesSinceBuy < 3 && pnlPct >= 0.15 && !pos.quickProfitTaken) {
+    try {
+      const { executeSell } = require('../operator/trade-executor');
+      const result = await executeSell(tokenAddress, 0.25, 'quick_profit_15pct_3min');
+      if (result?.success) {
+        pos.quickProfitTaken = true;
+        const pnlSol = pos.solInvested * pnlPct * 0.25;
+        console.log(`[Momentum] ${pos.symbol}: QUICK PROFIT — sold 25% at +${(pnlPct*100).toFixed(0)}% in ${minutesSinceBuy.toFixed(1)}min, ~${pnlSol.toFixed(4)} SOL profit`);
+        await sendTelegramMessage(`🚀 *QUICK PROFIT: ${pos.symbol}* — sold 25% at +${(pnlPct*100).toFixed(0)}% in ${minutesSinceBuy.toFixed(1)}min | 75% still riding`);
+      }
+    } catch (_) {}
+  }
+
   // Hard stop
   if (pnlPct <= stopLoss) {
     await executeMomentumSell(tokenAddress, `stop_${(stopLoss * 100).toFixed(0)}pct`);
@@ -610,10 +627,11 @@ async function handleNewTokenFromListener(tokenAddress) {
       activePositions.set(tokenAddress, {
         tokenAddress, symbol,
         solInvested: solAmount,
-        entryPrice,
-        highestPrice: entryPrice,
+        entryPrice, peakPrice: entryPrice,
+        boughtAt: Date.now(),
         trigger: 'listener_3gate',
-        openedAt: Date.now()
+        isPaperTrading: isPaper,
+        quickProfitTaken: false,
       });
       recordBuy();
       console.log(`[Listener] Position opened: ${symbol} @ ${entryPrice}`);
