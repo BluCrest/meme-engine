@@ -289,41 +289,26 @@ db.connect().then(async () => {
   // Register Telegram webhook
   await registerTelegramWebhook();
 
-  // Start token listener (uses HTTP WebSocket - works everywhere)
+  // ── SIMPLIFIED ARCHITECTURE ──────────────────────────────────
+  // ONE source: Helius WebSocket (on-chain, instant, never changes)
+  // No competing scanners — no rate limit wars
+  // Flow: new token → 3-gate check → buy → exit manager
+
+  // Source 1: Helius WebSocket — catches every new Pump.fun token on-chain
   const { startTokenListener } = require('./sentinel/token-listener');
   startTokenListener().catch(err => {
     console.error('[Server] Token listener failed:', err.message);
   });
 
-  // Start multi-DEX scanner (DexScreener + Jupiter + ALL DEXes)
-  const { startMultiDexScanner } = require('./sentinel/multi-dex-scanner');
-  startMultiDexScanner().catch(err => {
-    console.error('[Server] Multi-DEX scanner failed:', err.message);
-  });
-
-  // Start exit manager
+  // Position monitor + exits (stop loss, trailing, dev-aware)
   const { startExitManager } = require('./operator/exit-manager');
   startExitManager();
 
-  // Start alert batcher (queues scored tokens, sends top 5 >= 80% every 60s)
-  const { startAlertBatcher } = require('./operator/telegram-bot');
-  startAlertBatcher();
-
-  // Start pre-launch monitor (uses HTTP polling - works everywhere)
-  const { startPreLaunchMonitor } = require('./prelaunch/tg-group-monitor');
-  startPreLaunchMonitor().catch(err => {
-    console.error('[Server] Pre-launch monitor failed:', err.message);
-  });
-
-  // Start momentum scanner + trader (primary strategy: volume spikes + buy pressure)
-  const { startMomentumScanner } = require('./momentum/momentum-scanner');
-  const { startMomentumTrader, handleMomentumTrigger } = require('./momentum/momentum-trader');
-  startMomentumScanner(handleMomentumTrigger).catch(err => {
-    console.error('[Server] Momentum scanner failed:', err.message);
-  });
+  // Momentum trader (manages positions opened by token listener)
+  const { startMomentumTrader } = require('./momentum/momentum-trader');
   startMomentumTrader();
 
-  console.log('[Server] All services started - 24/7 monitoring active');
+  console.log('[Server] Simplified architecture started — WebSocket only, no competing scanners');
 
   app.listen(PORT, () => {
     console.log('Server running on port ' + PORT);
