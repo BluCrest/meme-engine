@@ -121,8 +121,8 @@ async function ensureATA(userKeypair, tokenMint, tx) {
   const ata = getAssociatedTokenAddressSync(mintPubkey, userKeypair.publicKey);
   
   // Check if ATA already exists
+  const conn = getConn();
   try {
-    const conn = getConn();
     if (conn) {
       const acc = await conn.getAccountInfo(ata);
       if (acc) {
