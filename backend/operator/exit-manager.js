@@ -8,6 +8,11 @@ const { getXSentiment } = require('../detective/x-scanner');
 const { formatX } = require('../utils/format-x');
 const config = require('../config');
 
+
+// Price cache — prevents hammering RPC on every exit check
+const priceCache = new Map(); // addr -> { price, ts }
+const PRICE_CACHE_TTL = 20000; // 20 seconds
+
 const EXIT_RULES = [];
 const STOP_LOSS_PCT = -0.20;
 const LOW_BALANCE_ALERT = 0.02;
@@ -16,8 +21,14 @@ const MAX_DAILY_LOSS_SOL = 0.05;
 const CONSECUTIVE_LOSS_LIMIT = 3;
 
 async function getCurrentPrice(tokenAddress) {
+  const cached = priceCache.get(tokenAddress);
+  if (cached && Date.now() - cached.ts < PRICE_CACHE_TTL) {
+    return cached.price;
+  }
   const pf = require('../utils/price-feed');
-  return pf.getCurrentPrice(tokenAddress);
+  const price = await pf.getCurrentPrice(tokenAddress);
+  if (price) priceCache.set(tokenAddress, { price, ts: Date.now() });
+  return price;
 }
 
 async function getDevWallet(tokenAddress) {
@@ -403,7 +414,7 @@ async function runExitManager() {
 
 let exitInterval;
 function startExitManager() {
-  const interval = (config.config.divergenceCheckInterval || 15) * 1000;
+  const interval = (config.config.divergenceCheckInterval || 30) * 1000;
   exitInterval = setInterval(runExitManager, interval);
   console.log(`[ExitMgr] Started, checking every ${interval / 1000}s`);
 }
