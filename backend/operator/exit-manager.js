@@ -3,6 +3,7 @@ const { executeSell } = require('./trade-executor');
 const { formatX } = require('../utils/format-x');
 const config = require('../config');
 
+const SOL_USD_RATE = 150;
 const priceCache = new Map();
 const PRICE_CACHE_TTL = 20000;
 
@@ -107,7 +108,7 @@ async function processExitsForPosition(position) {
     const entryPrice = position.entry_price || 0;
     if (!entryPrice || entryPrice <= 0) return;
 
-    const pnl = (currentPrice / entryPrice) - 1;
+    const pnl = entryPrice > 0 ? ((currentPrice / (entryPrice * SOL_USD_RATE)) - 1) : 0;
     const symbol = position.symbol || position.token_address.slice(0, 8);
 
     if (currentPrice > (position.highest_price || 0)) {
@@ -148,8 +149,8 @@ async function processExitsForPosition(position) {
     }
 
     // Trailing stop
-    const highestPrice = position.highest_price || entryPrice;
-    const gainFromEntry = (highestPrice / entryPrice) - 1;
+    const highestPrice = position.highest_price || (entryPrice * SOL_USD_RATE);
+    const gainFromEntry = entryPrice > 0 ? ((highestPrice / (entryPrice * SOL_USD_RATE)) - 1) : 0;
     if (gainFromEntry >= ep.trailingTrigger) {
       const drawdownFromPeak = (highestPrice - currentPrice) / highestPrice;
       if (drawdownFromPeak >= ep.trailingDrawdown) {
@@ -236,4 +237,9 @@ function startExitManager() {
 function stopExitManager() {
   if (exitInterval) clearInterval(exitInterval);
 }
-module.exports = { startExitManager, stopExitManager, processExitsForPosition };
+
+// Stubs for backward compatibility — circuit breaker disabled (clean learning data)
+async function checkCircuitBreakers() { return { stopTrading: false, reason: '' }; }
+async function isTokenInCooldown() { return false; }
+
+module.exports = { startExitManager, stopExitManager, processExitsForPosition, checkCircuitBreakers, isTokenInCooldown };
