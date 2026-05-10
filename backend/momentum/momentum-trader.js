@@ -141,7 +141,8 @@ async function executeMomentumBuy(tokenAddress, symbol, pctOfBalance, triggerTyp
       solAmount = 0.01; // simulate with 0.01 SOL in paper mode
     } else {
       const bal = await getBalance();
-      solAmount = Math.min(bal * pctOfBalance, bal * 0.2);
+      const maxBuy = Math.max(MIN_BUY, bal * pctOfBalance);
+      solAmount = Math.min(maxBuy, bal * 0.2);
       if (solAmount < MIN_BUY) {
         console.log(`[Momentum] ${symbol}: bal ${bal.toFixed(4)} too low for ${triggerType}, skip`);
         return null;
@@ -586,7 +587,9 @@ async function handleNewTokenFromListener(tokenAddress) {
 
     // Position sizing
     const bal = await getBalance();
-    const solAmount = isPaper ? 0.01 : Math.min(bal * 0.05, bal - MIN_BALANCE_FLOOR);
+    // Use 5% but ensure at least MIN_BUY, and keep MIN_BALANCE_FLOOR in reserve
+    const maxBuy = Math.max(MIN_BUY, bal * 0.05);
+    const solAmount = isPaper ? 0.01 : Math.min(maxBuy, bal - MIN_BALANCE_FLOOR);
 
     if (!isPaper && solAmount < MIN_BUY) {
       console.log(`[Listener] ${symbol}: balance ${bal.toFixed(4)} SOL too low — skipping`);
