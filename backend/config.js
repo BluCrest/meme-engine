@@ -38,5 +38,9 @@ module.exports = {
     alertCooldownMinutes: parseInt(process.env.ALERT_COOLDOWN_MINUTES) || 5,
     divergenceCheckInterval: parseInt(process.env.DIVERGENCE_CHECK_INTERVAL) || 120
   },
-  paperTrading: process.env.PAPER_TRADING === 'true'
+  paperTrading: process.env.PAPER_TRADING === 'true',
+  copyTrade: {
+    targetWallets: (process.env.COPY_TRADE_WALLETS || '').split(',').filter(Boolean),
+    maxSolPerCopy: parseFloat(process.env.COPY_MAX_SOL) || 0.05
+  }
 };

@@ -68,6 +68,7 @@ async function registerCommands() {
         { command: 'positions', description: 'Open positions' },
         { command: 'momentum', description: 'Active momentum trades' },
         { command: 'copywallets', description: 'Top tracked wallets' },
+        { command: 'copytrade', description: 'Copy trade status & wallets' },
         { command: 'pnl', description: 'P&L summary' },
         { command: 'trades', description: 'Recent trades' },
         { command: 'buy', description: 'Buy token: /buy <address> [sol]' },
@@ -369,7 +370,7 @@ async function handleUpdate(update) {
   if (text === '/start') {
     await sendTelegram('sendMessage', {
       chat_id: chatId,
-      text: '🚀 *Meme Engine Active!*\n\n⚡ Momentum sniping active — scans for volume spikes every 60s, auto-buys on buy pressure. Legacy scoring still running for quality plays.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/momentum - Active momentum trades\n/report - Per-token P&L breakdown\n/pnl - P&L summary\n/trades - Recent trades\n/buy <addr> - Buy a token\n/sell <addr> - Sell a position\n/learn - Learning stats & weights\n/help - All commands',
+      text: '🚀 *Meme Engine Active!*\n\n👥 Copy Trade mode — monitoring target wallets & mirroring trades.\n⚡ Momentum sniping active — scans for volume spikes, auto-buys on buy pressure.\n\nCommands:\n/portfolio - Wallet balance\n/positions - View open positions\n/copytrade - Copy trade status & wallet management\n/momentum - Active momentum trades\n/report - Per-token P&L breakdown\n/pnl - P&L summary\n/trades - Recent trades\n/buy <addr> - Buy a token\n/sell <addr> - Sell a position\n/learn - Learning stats & weights\n/help - All commands',
       parse_mode: 'Markdown'
     });
   }
@@ -583,6 +584,7 @@ Use /portfolio for balance, /positions for open trades`;
 /positions - View open positions
 /momentum - Active momentum trades
 /copywallets - Top tracked profitable wallets
+/copytrade - Copy trade wallet monitor status
 /pnl - P&L summary
 /trades - Recent trade history
 /buy <address> [sol] - Buy a token
@@ -598,6 +600,86 @@ Use /portfolio for balance, /positions for open trades`;
 Circuit breaker: pauses new buys after 3 consecutive losses or daily loss limit. Use /resume to clear.`,
       parse_mode: 'Markdown'
     });
+  }
+
+  if (text === '/copytrade' || text?.startsWith('/copytrade ')) {
+    try {
+      const { targetWallets, reloadWallets } = require('../copytrade/wallet-monitor');
+
+      if (text.startsWith('/copytrade ')) {
+        const parts = text.split(' ');
+        const subCmd = parts[1];
+
+        if (subCmd === 'add' && parts[2]) {
+          const newWallet = parts[2].trim();
+          const current = [...targetWallets];
+          if (!current.includes(newWallet)) {
+            current.push(newWallet);
+            process.env.COPY_TRADE_WALLETS = current.join(',');
+            reloadWallets();
+            await sendTelegram('sendMessage', {
+              chat_id: chatId,
+              text: `✅ Added wallet \`${newWallet.slice(0, 8)}...\` to copy trade monitoring`,
+              parse_mode: 'Markdown'
+            });
+          } else {
+            await sendTelegram('sendMessage', {
+              chat_id: chatId,
+              text: `⚠️ Wallet already monitored`,
+              parse_mode: 'Markdown'
+            });
+          }
+          return;
+        }
+
+        if (subCmd === 'remove' && parts[2]) {
+          const removeWallet = parts[2].trim();
+          const current = targetWallets.filter(w => w !== removeWallet);
+          process.env.COPY_TRADE_WALLETS = current.join(',');
+          reloadWallets();
+          await sendTelegram('sendMessage', {
+            chat_id: chatId,
+            text: `🗑️ Removed wallet \`${removeWallet.slice(0, 8)}...\``,
+            parse_mode: 'Markdown'
+          });
+          return;
+        }
+
+        if (subCmd === 'clear') {
+          process.env.COPY_TRADE_WALLETS = '';
+          reloadWallets();
+          await sendTelegram('sendMessage', {
+            chat_id: chatId,
+            text: '🗑️ All copy trade wallets cleared',
+            parse_mode: 'Markdown'
+          });
+          return;
+        }
+      }
+
+      if (!targetWallets.length) {
+        await sendTelegram('sendMessage', {
+          chat_id: chatId,
+          text: `👥 *Copy Trade Monitor* — *INACTIVE*\n\nNo target wallets configured.\n\nTo add: \`/copytrade add <wallet_address>\`\nTo remove: \`/copytrade remove <wallet_address>\`\nTo clear: \`/copytrade clear\``,
+          parse_mode: 'Markdown'
+        });
+        return;
+      }
+
+      let msg = `👥 *Copy Trade Monitor* — *ACTIVE*\n━━━━━━━━━━━━━━━━━━━━\n\n*Target Wallets:*\n`;
+      for (const w of targetWallets) {
+        msg += `\`${w.slice(0, 12)}...${w.slice(-4)}\`\n`;
+      }
+      msg += `\nMax per copy: ${config.copyTrade?.maxSolPerCopy || 0.05} SOL\n`;
+      msg += `\nCommands:\n/copytrade add <address>\n/copytrade remove <address>\n/copytrade clear`;
+      await sendTelegram('sendMessage', {
+        chat_id: chatId,
+        text: msg,
+        parse_mode: 'Markdown'
+      });
+    } catch (e) {
+      console.error('[Telegram] /copytrade error:', e.message);
+    }
   }
 
   if (text === '/papertrading' || text?.startsWith('/papertrading ')) {

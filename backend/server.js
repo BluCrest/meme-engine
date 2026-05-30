@@ -145,6 +145,31 @@ app.get('/portfolio', async (req, res) => {
   }
 });
 
+// Copy trade management endpoints
+app.get('/copytrade/wallets', async (req, res) => {
+  const { targetWallets } = require('./copytrade/wallet-monitor');
+  res.json({ wallets: targetWallets });
+});
+
+app.post('/copytrade/wallets', async (req, res) => {
+  const { wallets } = req.body || {};
+  if (!Array.isArray(wallets) || !wallets.length) {
+    return res.status(400).json({ error: 'wallets must be a non-empty array' });
+  }
+  process.env.COPY_TRADE_WALLETS = wallets.join(',');
+  const { reloadWallets } = require('./copytrade/wallet-monitor');
+  reloadWallets();
+  res.json({ status: 'ok', wallets });
+});
+
+app.post('/copytrade/max-sol', async (req, res) => {
+  const { maxSol } = req.body || {};
+  if (!maxSol || maxSol < 0.001) return res.status(400).json({ error: 'invalid maxSol' });
+  process.env.COPY_MAX_SOL = String(maxSol);
+  config.copyTrade.maxSolPerCopy = maxSol;
+  res.json({ status: 'ok', maxSol });
+});
+
 // Manual buy endpoint
 app.post('/buy/:tokenAddress', async (req, res) => {
   const { executeBuy } = require('./operator/trade-executor');
@@ -286,6 +311,12 @@ async function registerTelegramWebhook() {
 db.connect().then(async () => {
   console.log('[Server] Database connected');
 
+  // Apply paper trading mode from .env
+  if (config.paperTrading) {
+    await db.setPaperTrading(true);
+    console.log('[Server] Paper trading mode ACTIVE (from .env)');
+  }
+
   // Register Telegram webhook
   await registerTelegramWebhook();
 
@@ -324,6 +355,10 @@ db.connect().then(async () => {
   // Momentum trader (manages positions opened by token listener)
   const { startMomentumTrader } = require('./momentum/momentum-trader');
   startMomentumTrader();
+
+  // Copy trader (monitors target wallets and mirrors trades)
+  const { startCopyTrader } = require('./copytrade/wallet-monitor');
+  startCopyTrader();
 
   console.log('[Server] Simplified architecture started — WebSocket only, no competing scanners');
 
